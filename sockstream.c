@@ -126,7 +126,6 @@ void sock_readRect(SockStream *strm, char *buf, int bytesPerLine,
     struct iovec iov[IOV_SIZE];
     int lineNo;
 
-    vnclog_info("sock_readRect: %dx%d", width, height);
     if( width == 0 || height == 0 )
         return;
     while( strm->readSize - strm->readOff >= width ) {
