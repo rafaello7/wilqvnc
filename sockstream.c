@@ -14,8 +14,6 @@ struct SockStream {
     char readBuf[64];
     char writeBuf[64];
     int readOff, readSize, writeOff;
-    struct iovec *iov;
-    int iov_nitems;
 };
 
 SockStream *sock_connectVNCHost(const char *hostVNC)
@@ -59,8 +57,6 @@ SockStream *sock_connectVNCHost(const char *hostVNC)
     SockStream *strm = malloc(sizeof(SockStream));
     strm->sockFd = sockFd;
     strm->readOff = strm->readSize = strm->writeOff = 0;
-    strm->iov = NULL;
-    strm->iov_nitems = 0;
     return strm;
 }
 
@@ -83,8 +79,12 @@ void sock_read(SockStream *strm, void *buf, int toRead)
             iov[0].iov_base = buf;
             iov[0].iov_len = toRead;
             int rd = readv(strm->sockFd, iov, 2);
-            if( rd < 0 )
-                vnclog_fatal_errno("socket read");
+            if( rd <= 0 ) {
+                if( rd == 0 )
+                    vnclog_fatal("end of stream");
+                else
+                    vnclog_fatal_errno("socket read");
+            }
             toRead -= rd;
             if( toRead <= 0 )
                 break;
@@ -122,38 +122,66 @@ unsigned sock_readU32(SockStream *strm)
 void sock_readRect(SockStream *strm, char *buf, int bytesPerLine,
         int width, int height)
 {
+    enum { IOV_SIZE = 128 };
+    struct iovec iov[IOV_SIZE];
     int lineNo;
 
-    while( height > 0 && strm->readSize - strm->readOff >= width ) {
+    vnclog_info("sock_readRect: %dx%d", width, height);
+    if( width == 0 || height == 0 )
+        return;
+    while( strm->readSize - strm->readOff >= width ) {
         memcpy(buf, strm->readBuf + strm->readOff, width);
         strm->readOff += width;
-        --height;
+        if( --height == 0 )
+            return;
         buf = (char*)buf + bytesPerLine;
     }
-    if( height == 0 )
-        return;
     int off = strm->readSize - strm->readOff;
-    if( off > 0 )
-        memcpy(buf, strm->readBuf + strm->readOff, off);
-    if( height >= strm->iov_nitems ) {
-        strm->iov_nitems = height + 1;
-        strm->iov = realloc(strm->iov,
-                strm->iov_nitems * sizeof(*strm->iov));
+    memcpy(buf, strm->readBuf + strm->readOff, off);
+    while( height >= IOV_SIZE ) {
+        for(lineNo = 1; lineNo < IOV_SIZE; ++lineNo) {
+            iov[lineNo].iov_base = buf + lineNo * bytesPerLine;
+            iov[lineNo].iov_len = width;
+        }
+        while( (lineNo = off / width) < IOV_SIZE ) {
+            int lineOff = off - lineNo * width;
+            iov[lineNo].iov_base = buf + lineNo * bytesPerLine + lineOff;
+            iov[lineNo].iov_len = width - lineOff;
+            int rd = readv(strm->sockFd, iov + lineNo, IOV_SIZE - lineNo);
+            if( rd <= 0 ) {
+                if( rd == 0 )
+                    vnclog_fatal("end of stream");
+                else
+                    vnclog_fatal_errno("socket read");
+            }
+            off += rd;
+        }
+        height -= IOV_SIZE;
+        if( height == 0 ) {
+            strm->readOff = strm->readSize = 0;
+            return;
+        }
+        buf = (char*)buf + IOV_SIZE * bytesPerLine;
+        off = 0;
     }
     for(lineNo = 1; lineNo < height; ++lineNo) {
-        strm->iov[lineNo].iov_base = buf + lineNo * bytesPerLine;
-        strm->iov[lineNo].iov_len = width;
+        iov[lineNo].iov_base = buf + lineNo * bytesPerLine;
+        iov[lineNo].iov_len = width;
     }
-    strm->iov[height].iov_base = strm->readBuf;
-    strm->iov[height].iov_len = sizeof(strm->readBuf);
+    iov[height].iov_base = strm->readBuf;
+    iov[height].iov_len = sizeof(strm->readBuf);
     while( (lineNo = off / width) < height ) {
         int lineOff = off - lineNo * width;
-        strm->iov[lineNo].iov_base = buf + lineNo * bytesPerLine + lineOff;
-        strm->iov[lineNo].iov_len = width - lineOff;
-        int rd = readv(strm->sockFd,
-                strm->iov + lineNo, height - lineNo + 1);
-        if( rd < 0 )
-            vnclog_fatal_errno("socket read");
+        iov[lineNo].iov_base = buf + lineNo * bytesPerLine + lineOff;
+        iov[lineNo].iov_len = width - lineOff;
+        int rd = readv(strm->sockFd, iov + lineNo,
+                height - lineNo + 1);
+        if( rd <= 0 ) {
+            if( rd == 0 )
+                vnclog_fatal("end of stream");
+            else
+                vnclog_fatal_errno("socket read");
+        }
         off += rd;
     }
     strm->readSize = off - height * width;
