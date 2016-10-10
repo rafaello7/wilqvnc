@@ -4,8 +4,15 @@
 #include "pixelformat.h"
 #include "sockstream.h"
 
-void vncconn_exchangeVersion(SockStream *strm);
-void vncconn_exchangeAuth(SockStream *strm, const char *passwdFile);
+typedef enum {
+    VNCVER_3_3,
+    VNCVER_3_7,
+    VNCVER_3_8
+} VncVersion;
+
+VncVersion vncconn_exchangeVersion(SockStream *strm);
+void vncconn_exchangeAuth(SockStream *strm, const char *passwdFile,
+        VncVersion vncVer);
 void vncconn_setEncodings(SockStream *strm, int enableHextile);
 void vncconn_setPixelFormat(SockStream *strm, const PixelFormat*);
 void vncconn_sendFramebufferUpdateRequest(SockStream *strm, int incremental,

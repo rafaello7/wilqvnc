@@ -122,8 +122,8 @@ int main(int argc, char *argv[])
     cmdline_parse(argc, argv, &params);
     vnclog_setLevel(params.logLevel);
     SockStream *strm = sock_connectVNCHost(params.host);
-    vncconn_exchangeVersion(strm);
-    vncconn_exchangeAuth(strm, params.passwdFile);
+    VncVersion vncVer = vncconn_exchangeVersion(strm);
+    vncconn_exchangeAuth(strm, params.passwdFile, vncVer);
     sock_writeU8(strm, 0); // shared flag
     sock_flush(strm);
     // read ServerInit

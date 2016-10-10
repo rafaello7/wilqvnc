@@ -7,27 +7,48 @@
 #include "vnclog.h"
 
 
-void vncconn_exchangeVersion(SockStream *strm)
+VncVersion vncconn_exchangeVersion(SockStream *strm)
 {
-    static const char VER[] = "RFB 003.008\n";
+    static const char VER33[] = "RFB 003.003\n";
+    static const char VER37[] = "RFB 003.007\n";
+    static const char VER38[] = "RFB 003.008\n";
     char buf[12];
+    VncVersion vncVer;
 
     sock_read(strm, buf, 12);
-    if( memcmp(buf, VER, 12) )
-        vnclog_fatal("server version %.12s unsupported", buf);
-    sock_write(strm, VER, 12);
+    if( ! memcmp(buf, VER33, 12) )
+        vncVer = VNCVER_3_3;
+    else if( ! memcmp(buf, VER37, 12) )
+        vncVer = VNCVER_3_7;
+    else if( !memcmp(buf, VER38, 12) )
+        vncVer = VNCVER_3_8;
+    else
+        vnclog_fatal("unsupported server version %.11s", buf);
+    sock_write(strm, buf, 12);
     sock_flush(strm);
+    return vncVer;
 }
 
-void vncconn_exchangeAuth(SockStream *strm, const char *passwdFile)
+void vncconn_exchangeAuth(SockStream *strm, const char *passwdFile,
+        VncVersion vncVer)
 {
     static char pfileKey[] = "\350J\326`\304r\032\340";
     char buf[1024], pass[8];
-    unsigned len;
-    int authCnt, i, c, isAuthNone = 0, isAuthVNC = 0;
+    int i, c, len, selectedAuthNo = 0;
 
-    authCnt = sock_readU8(strm);
-    if( authCnt == 0 ) {
+    if( vncVer == VNCVER_3_3 ) {
+        selectedAuthNo = sock_readU32(strm);
+    }else{
+        int authCnt = sock_readU8(strm);
+        vnclog_debug("authentication methods count: %d", authCnt);
+        for( ; authCnt > 0; --authCnt ) {
+            int authNo = sock_readU8(strm);
+            vnclog_debug("  %d", authNo);
+            if( selectedAuthNo == 0 || authNo < selectedAuthNo )
+                selectedAuthNo = authNo;
+        }
+    }
+    if( selectedAuthNo == 0 ) {
         len = sock_readU32(strm);
         if( len >= sizeof(buf) )
             len = sizeof(buf) - 1;
@@ -35,23 +56,10 @@ void vncconn_exchangeAuth(SockStream *strm, const char *passwdFile)
         buf[len] = '\0';
         vnclog_fatal("server error: %s", buf);
     }
-    vnclog_debug("authentication methods count: %d", authCnt);
-    while( authCnt-- > 0 ) {
-        int authNo = sock_readU8(strm);
-        vnclog_debug("  %d", authNo);
-        switch(authNo) {
-        case 1:
-            isAuthNone = 1;
-            break;
-        case 2:
-            isAuthVNC = 1;
-            break;
-        }
-    }
-    if( isAuthNone ) {
+    if( selectedAuthNo == 1 ) {
         sock_writeU8(strm, 1);
         sock_flush(strm);
-    }else if( isAuthVNC ) {
+    }else if( selectedAuthNo == 2 ) {
         if( passwdFile != NULL ) {
             FILE *fp = fopen(passwdFile, "r");
             if( fp == NULL )
@@ -79,13 +87,18 @@ void vncconn_exchangeAuth(SockStream *strm, const char *passwdFile)
             vnclog_fatal("ecb_crypt error");
         sock_write(strm, buf, 16);
         sock_flush(strm);
-        if( sock_readU32(strm) != 0 ) {
-            len = sock_readU32(strm);
-            sock_read(strm, buf, len);
-            vnclog_fatal("%.*s", len, buf);
-        }
     }else
         vnclog_fatal("unsupported authentication type");
+    if( selectedAuthNo != 1 || vncVer == VNCVER_3_8 ) {
+        if( sock_readU32(strm) != 0 ) {     // authentication result
+            if( vncVer == VNCVER_3_8 ) {
+                len = sock_readU32(strm);
+                sock_read(strm, buf, len);
+                vnclog_fatal("%.*s", len, buf);
+            }else
+                vnclog_fatal("Authentication failed.");
+        }
+    }
 }
 
 void vncconn_setEncodings(SockStream *strm, int enableHextile)
