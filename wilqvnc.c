@@ -114,7 +114,8 @@ static void recvFramebufferUpdate(DisplayConnection *conn, SockStream *strm,
 
 int main(int argc, char *argv[])
 {
-    int msg, toRd, width, height, bytespp;
+    int msg, toRd, width, height, bytespp, frameCnt = 0;
+    unsigned long long lastShowFpTm;
     CmdLineParams params;
     PixelFormat pixelFormat;
     char buf[4096];
@@ -144,6 +145,7 @@ int main(int argc, char *argv[])
     vncconn_setEncodings(strm, params.enableHextile);
     vncconn_setPixelFormat(strm, &pixelFormat);
     vncconn_sendFramebufferUpdateRequest(strm, 0, 0, 0, width, height);
+    lastShowFpTm = curTimeMs();
     int isPendingUpdReq = 1;
     while( 1 ) {
         DisplayEvent dispEv;
@@ -172,6 +174,16 @@ int main(int argc, char *argv[])
             msg = sock_readU8(strm);
             switch( msg ) {
             case 0:     // FramebufferUpdate
+                if( params.showFrameRate ) {
+                    ++frameCnt;
+                    unsigned long long curTm = curTimeMs();
+                    if( curTm - lastShowFpTm >= 1000 ) {
+                        vnclog_info("%.2f fps",
+                                1000.0 * frameCnt / (curTm - lastShowFpTm));
+                        lastShowFpTm = curTm;
+                        frameCnt = 0;
+                    }
+                }
                 recvFramebufferUpdate(conn, strm, bytespp);
                 isPendingUpdReq = 0;
                 break;

@@ -7,6 +7,7 @@ typedef struct {
     int fullScreen;
     int logLevel;
     int enableHextile;
+    int showFrameRate;
 } CmdLineParams;
 
 void cmdline_parse(int argc, char *argv[], CmdLineParams*);
