@@ -57,8 +57,10 @@ void vncconn_exchangeAuth(SockStream *strm, const char *passwdFile,
         vnclog_fatal("server error: %s", buf);
     }
     if( selectedAuthNo == 1 ) {
-        sock_writeU8(strm, 1);
-        sock_flush(strm);
+        if( vncVer != VNCVER_3_3 ) {
+            sock_writeU8(strm, 1);
+            sock_flush(strm);
+        }
     }else if( selectedAuthNo == 2 ) {
         if( passwdFile != NULL ) {
             FILE *fp = fopen(passwdFile, "r");
@@ -74,8 +76,10 @@ void vncconn_exchangeAuth(SockStream *strm, const char *passwdFile,
                 exit(1);
             strncpy(pass, p, 8);
         }
-        sock_writeU8(strm, 2);
-        sock_flush(strm);
+        if( vncVer != VNCVER_3_3 ) {
+            sock_writeU8(strm, 2);
+            sock_flush(strm);
+        }
         sock_read(strm, buf, 16);
         // "mirror" password bytes
         for(i = 0; i < 8; ++i) {
