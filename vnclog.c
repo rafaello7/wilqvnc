@@ -9,7 +9,7 @@
 
 static int gLogLevel = 0;
 
-void vnclog_setLevel(int level)
+void log_setLevel(int level)
 {
     gLogLevel = level;
 }
@@ -27,7 +27,7 @@ static void dolog(int level, const char *fmt, va_list args, int errNum)
     }
 }
 
-void vnclog_fatal(const char *fmt, ...)
+void log_fatal(const char *fmt, ...)
 {
     va_list args;
 
@@ -37,7 +37,7 @@ void vnclog_fatal(const char *fmt, ...)
     exit(1);
 }
 
-void vnclog_fatal_errno(const char *fmt, ...)
+void log_fatal_errno(const char *fmt, ...)
 {
     va_list args;
     int errNum = errno;
@@ -48,7 +48,7 @@ void vnclog_fatal_errno(const char *fmt, ...)
     exit(1);
 }
 
-void vnclog_error(const char *fmt, ...)
+void log_error(const char *fmt, ...)
 {
     va_list args;
 
@@ -57,7 +57,7 @@ void vnclog_error(const char *fmt, ...)
     va_end(args);
 }
 
-void vnclog_error_errno(const char *fmt, ...)
+void log_error_errno(const char *fmt, ...)
 {
     va_list args;
     int errNum = errno;
@@ -67,7 +67,7 @@ void vnclog_error_errno(const char *fmt, ...)
     va_end(args);
 }
 
-void vnclog_info(const char *fmt, ...)
+void log_info(const char *fmt, ...)
 {
     va_list args;
 
@@ -76,7 +76,7 @@ void vnclog_info(const char *fmt, ...)
     va_end(args);
 }
 
-void vnclog_debug(const char *fmt, ...)
+void log_debug(const char *fmt, ...)
 {
     va_list args;
 

@@ -1,9 +1,9 @@
 #include <stdio.h>
 #include <sys/time.h>
-#include "vncdisplay.h"
-#include "vncconn.h"
+#include "clidisplay.h"
+#include "clivncconn.h"
 #include "vnclog.h"
-#include "cmdline.h"
+#include "clicmdline.h"
 
 
 static void decodeRRE(DisplayConnection *conn, SockStream *strm,
@@ -13,14 +13,14 @@ static void decodeRRE(DisplayConnection *conn, SockStream *strm,
     int i, cnt = sock_readU32(strm); // number of subrectangles
 
     sock_read(strm, buf, bytespp);
-    vncdisp_fillRect(conn, buf, x, y, width, height);
+    clidisp_fillRect(conn, buf, x, y, width, height);
     for(i = 0; i < cnt; ++i) {
         sock_read(strm, buf, bytespp);
         int sx = sock_readU16(strm);
         int sy = sock_readU16(strm);
         int sw = sock_readU16(strm);
         int sh = sock_readU16(strm);
-        vncdisp_fillRect(conn, buf, x + sx, y + sy, sw, sh);
+        clidisp_fillRect(conn, buf, x + sx, y + sy, sw, sh);
     }
 }
 
@@ -36,13 +36,13 @@ static void decodeHextile(DisplayConnection *conn, SockStream *strm,
             int tw = width - j > 16 ? 16 : width - j;
             unsigned mask = sock_readU8(strm);
             if( mask & 1 ) {    // raw encoding
-                vncdisp_putRectFromSocket(conn, strm, x + j, y + i, tw, th);
+                clidisp_putRectFromSocket(conn, strm, x + j, y + i, tw, th);
             }else{
                 if( mask & 2 )  // BackgroundSpecified
                     sock_read(strm, bg, bytespp);
                 if( mask & 4 )  // ForegroundSpecified
                     sock_read(strm, fg, bytespp);
-                vncdisp_fillRect(conn, bg, x + j, y + i, tw, th);
+                clidisp_fillRect(conn, bg, x + j, y + i, tw, th);
                 if( mask & 8 )  { // AnySubrects
                     int subrectCount = sock_readU8(strm), sub;
                     for(sub = 0; sub < subrectCount; ++sub) {
@@ -53,7 +53,7 @@ static void decodeHextile(DisplayConnection *conn, SockStream *strm,
                             subfg = fg;
                         unsigned pos = sock_readU8(strm);
                         unsigned dim = sock_readU8(strm);
-                        vncdisp_fillRect(conn, subfg,
+                        clidisp_fillRect(conn, subfg,
                                 x + j + (pos >> 4), y + i + (pos&15),
                                 (dim >> 4) + 1, (dim & 15) + 1);
                     }
@@ -86,12 +86,12 @@ static void recvFramebufferUpdate(DisplayConnection *conn, SockStream *strm,
         int encType = sock_readU32(strm);
         switch( encType ) {
         case 0: // Raw encoding
-            vncdisp_putRectFromSocket(conn, strm, x, y, width, height);
+            clidisp_putRectFromSocket(conn, strm, x, y, width, height);
             break;
         case 1: // CopyRect encoding
             srcX = sock_readU16(strm);
             srcY = sock_readU16(strm);
-            vncdisp_copyRect(conn, srcX, srcY, x, y, width, height);
+            clidisp_copyRect(conn, srcX, srcY, x, y, width, height);
             break;
         case 2: // RRE encoding
             decodeRRE(conn, strm, x, y, width, height, bytespp);
@@ -100,16 +100,16 @@ static void recvFramebufferUpdate(DisplayConnection *conn, SockStream *strm,
             decodeHextile(conn, strm, x, y, width, height, bytespp);
             break;
         default:
-            vnclog_fatal("unsupported encoding %d", encType);
+            log_fatal("unsupported encoding %d", encType);
             break;
         }
         unsigned long long curTm = curTimeMs();
         if( cnt > 0 && curTm - updBegTm > 500 ) {
-            vncdisp_flush(conn);
+            clidisp_flush(conn);
             updBegTm = curTm;
         }
     }
-    vncdisp_flush(conn);
+    clidisp_flush(conn);
 }
 
 int main(int argc, char *argv[])
@@ -121,51 +121,47 @@ int main(int argc, char *argv[])
     char buf[4096];
 
     cmdline_parse(argc, argv, &params);
-    vnclog_setLevel(params.logLevel);
+    log_setLevel(params.logLevel);
     SockStream *strm = sock_connectVNCHost(params.host);
-    VncVersion vncVer = vncconn_exchangeVersion(strm);
-    vncconn_exchangeAuth(strm, params.passwdFile, vncVer);
+    VncVersion vncVer = cliconn_exchangeVersion(strm);
+    cliconn_exchangeAuth(strm, params.passwdFile, vncVer);
     sock_writeU8(strm, 0); // shared flag
     sock_flush(strm);
     // read ServerInit
     width = sock_readU16(strm);
     height = sock_readU16(strm);
-    vnclog_info("desktop size: %dx%d", width, height);
-    // PIXEL_FORMAT
-    sock_read(strm, buf, 16);
+    cliconn_readPixelFormat(strm, &pixelFormat);
+    log_info("desktop size: %dx%dx%d", width, height, pixelFormat.bitsPerPixel);
     // name-length
     toRd = sock_readU32(strm);
     // name-string
     sock_read(strm, buf, toRd);
     buf[toRd] = '\0';
-    DisplayConnection *conn = vncdisp_open(width, height, buf,
+    DisplayConnection *conn = clidisp_open(width, height, buf,
             argc, argv, params.fullScreen);
-    vncdisp_getPixelFormat(conn, &pixelFormat);
+    clidisp_getPixelFormat(conn, &pixelFormat);
     bytespp = (pixelFormat.bitsPerPixel+7) / 8;
-    vncconn_setEncodings(strm, params.enableHextile);
-    vncconn_setPixelFormat(strm, &pixelFormat);
-    vncconn_sendFramebufferUpdateRequest(strm, 0, 0, 0, width, height);
+    cliconn_setEncodings(strm, params.enableHextile);
+    cliconn_setPixelFormat(strm, &pixelFormat);
+    cliconn_sendFramebufferUpdateRequest(strm, 0, 0, 0, width, height);
     lastShowFpTm = curTimeMs();
     int isPendingUpdReq = 1;
     while( 1 ) {
         DisplayEvent dispEv;
-        int isEvFd = vncdisp_nextEvent(conn, strm, &dispEv, isPendingUpdReq);
+        int isEvFd = clidisp_nextEvent(conn, strm, &dispEv, isPendingUpdReq);
         if( ! isPendingUpdReq && ! isEvFd && dispEv.evType == VET_NONE ) {
-            vncconn_sendFramebufferUpdateRequest(strm, 1, 0, 0, width, height);
+            cliconn_sendFramebufferUpdateRequest(strm, 1, 0, 0, width, height);
             isPendingUpdReq = 1;
-            isEvFd = vncdisp_nextEvent(conn, strm, &dispEv, 1);
+            isEvFd = clidisp_nextEvent(conn, strm, &dispEv, 1);
         }
         switch( dispEv.evType ) {
         case VET_NONE:
             break;
-        case VET_KEYDOWN:
-            vncconn_sendKeyEvent(strm, 1, dispEv.detail);
-            break;
-        case VET_KEYUP:
-            vncconn_sendKeyEvent(strm, 0, dispEv.detail);
+        case VET_KEY:
+            cliconn_sendKeyEvent(strm, &dispEv.kev);
             break;
         case VET_MOUSE:
-            vncconn_sendPointerEvent(strm, dispEv.detail, dispEv.x, dispEv.y);
+            cliconn_sendPointerEvent(strm, &dispEv.pev);
             break;
         case VET_CLOSE:
             goto end;
@@ -178,7 +174,7 @@ int main(int argc, char *argv[])
                     ++frameCnt;
                     unsigned long long curTm = curTimeMs();
                     if( curTm - lastShowFpTm >= 1000 ) {
-                        vnclog_info("%.2f fps",
+                        log_info("%.2f fps",
                                 1000.0 * frameCnt / (curTm - lastShowFpTm));
                         lastShowFpTm = curTm;
                         frameCnt = 0;
@@ -188,28 +184,23 @@ int main(int argc, char *argv[])
                 isPendingUpdReq = 0;
                 break;
             case 1:     // SetColorMapEntries
-                vnclog_fatal("unexpected SetColorMapEntries message");
+                log_fatal("unexpected SetColorMapEntries message");
                 break;
             case 2:     // Bell
                 break;
             case 3:     // ServerCutText
-                sock_read(strm, buf, 3);   // padding
+                sock_discard(strm, 3);   // padding
                 toRd = sock_readU32(strm); // text length
-                while( toRd >= sizeof(buf) ) {
-                    sock_read(strm, buf, sizeof(buf));
-                    toRd -= sizeof(buf);
-                }
-                if( toRd > 0 )
-                    sock_read(strm, buf, toRd);
+                sock_discard(strm, toRd);
                 break;
             default:
-                vnclog_fatal("unsupported message %d", msg);
+                log_fatal("unsupported message %d", msg);
                 break;
             }
         }
     }
 end:
-    vncdisp_close(conn);
+    clidisp_close(conn);
     sock_close(strm);
     return 0;
 }

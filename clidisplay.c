@@ -7,7 +7,7 @@
 #include <sys/uio.h>
 #include <string.h>
 #include <sys/select.h>
-#include "vncdisplay.h"
+#include "clidisplay.h"
 #include "vnclog.h"
 
 
@@ -21,13 +21,13 @@ struct DisplayConnection {
     KeySym lastKeysymDown;
 };
 
-DisplayConnection *vncdisp_open(int width, int height, const char *title,
+DisplayConnection *clidisp_open(int width, int height, const char *title,
         int argc, char *argv[], int fullScreen)
 {
     Display *d;
 
     if( (d = XOpenDisplay(NULL)) == NULL )
-        vnclog_fatal("unable to open display");
+        log_fatal("unable to open display");
     DisplayConnection *conn = malloc(sizeof(DisplayConnection));
     conn->d = d;
     int defScreenNum = XDefaultScreen(d);
@@ -39,16 +39,16 @@ DisplayConnection *vncdisp_open(int width, int height, const char *title,
                 &conn->shmInfo, width, height);
         conn->shmInfo.shmid = shmget(IPC_PRIVATE,
                 conn->img->bytes_per_line * conn->img->height, IPC_CREAT|0777);
-        vnclog_debug("shm id: %d", conn->shmInfo.shmid);
+        log_debug("shm id: %d", conn->shmInfo.shmid);
         conn->shmInfo.shmaddr =
             conn->img->data = shmat (conn->shmInfo.shmid, 0, 0);
         conn->shmInfo.readOnly = False;
         Status st = XShmAttach(d, &conn->shmInfo);
         shmctl(conn->shmInfo.shmid, IPC_RMID, NULL);
         if( st == 0 )
-            vnclog_fatal("XShmAttach failed");
+            log_fatal("XShmAttach failed");
     }else{
-        vnclog_info("shm extension is not available");
+        log_info("shm extension is not available");
         conn->img = XCreateImage(d, defVis, defDepth, ZPixmap, 0, NULL,
                 width, height, 32, 0);
         conn->img->data = malloc(conn->img->bytes_per_line * height);
@@ -97,7 +97,7 @@ static void extractShiftMaxFromMask(unsigned long mask,
     unsigned shift = 0;
 
     if( mask == 0 )
-        vnclog_fatal("your display is not true-color one");
+        log_fatal("your display is not true-color one");
     while( (mask & 1) == 0 ) {
         mask >>= 1;
         ++shift;
@@ -106,7 +106,7 @@ static void extractShiftMaxFromMask(unsigned long mask,
     *resShift = shift;
 }
 
-void vncdisp_getPixelFormat(DisplayConnection *conn, PixelFormat *pixelFormat)
+void clidisp_getPixelFormat(DisplayConnection *conn, PixelFormat *pixelFormat)
 {
     pixelFormat->bitsPerPixel = conn->img->bits_per_pixel;
     int defScreenNum = XDefaultScreen(conn->d);
@@ -119,22 +119,22 @@ void vncdisp_getPixelFormat(DisplayConnection *conn, PixelFormat *pixelFormat)
             &pixelFormat->shiftGreen);
     extractShiftMaxFromMask(conn->img->blue_mask, &pixelFormat->maxBlue,
             &pixelFormat->shiftBlue);
-    vnclog_debug("pixel format:");
-    vnclog_debug("  bitsPerPixel: %d", pixelFormat->bitsPerPixel);
-    vnclog_debug("  depth:        %d", pixelFormat->depth);
-    vnclog_debug("  bigEndian:    %s",
+    log_debug("pixel format:");
+    log_debug("  bitsPerPixel: %d", pixelFormat->bitsPerPixel);
+    log_debug("  depth:        %d", pixelFormat->depth);
+    log_debug("  bigEndian:    %s",
             pixelFormat->bigEndian ? "true" : "false");
-    vnclog_debug("  trueColor:    %s",
+    log_debug("  trueColor:    %s",
             pixelFormat->trueColor ? "true" : "false");
-    vnclog_debug("  red   shift:  %-2d  max: %d", pixelFormat->shiftRed,
+    log_debug("  red   shift:  %-2d  max: %d", pixelFormat->shiftRed,
             pixelFormat->maxRed);
-    vnclog_debug("  green shift:  %-2d  max: %d", pixelFormat->shiftGreen,
+    log_debug("  green shift:  %-2d  max: %d", pixelFormat->shiftGreen,
             pixelFormat->maxGreen);
-    vnclog_debug("  blue  shift:  %-2d  max: %d", pixelFormat->shiftBlue,
+    log_debug("  blue  shift:  %-2d  max: %d", pixelFormat->shiftBlue,
             pixelFormat->maxBlue);
 }
 
-void vncdisp_flush(DisplayConnection *conn)
+void clidisp_flush(DisplayConnection *conn)
 {
     if( conn->shmInfo.shmaddr != NULL ) {
         XShmPutImage(conn->d, conn->win, conn->gc, conn->img, 0, 0, 0, 0,
@@ -168,8 +168,9 @@ static void processPendingEvents(DisplayConnection *conn,
         case KeyPress:
             XLookupString(&xev.xkey, NULL, 0, &keysym, NULL);
             if( keysym != NoSymbol ) {
-                displayEvent->evType = VET_KEYDOWN;
-                displayEvent->detail = keysym;
+                displayEvent->evType = VET_KEY;
+                displayEvent->kev.isDown = 1;
+                displayEvent->kev.keysym = keysym;
                 conn->lastKeysymDown = keysym;
             }
             break;
@@ -177,8 +178,9 @@ static void processPendingEvents(DisplayConnection *conn,
             XLookupString(&xev.xkey, NULL, 0, &keysym, NULL);
             if( keysym != NoSymbol ) {
                 conn->lastKeysymDown = NoSymbol;
-                displayEvent->evType = VET_KEYUP;
-                displayEvent->detail = keysym;
+                displayEvent->evType = VET_KEY;
+                displayEvent->kev.isDown = 0;
+                displayEvent->kev.keysym = keysym;
             }
             break;
         case FocusIn:
@@ -191,26 +193,28 @@ static void processPendingEvents(DisplayConnection *conn,
                 int d;
                 XGetInputFocus(conn->d, &win, &d);
                 if( win == None && d == 0 ) {
-                    vnclog_debug("set input focus to mine");
+                    log_debug("set input focus to mine");
                     XSetInputFocus(conn->d, conn->win,
                             RevertToPointerRoot, CurrentTime);
                 }
             }
 #endif
             if( conn->lastKeysymDown != NoSymbol ) {
-                vnclog_debug("send key %lu UP on leave",
+                log_debug("send key %lu UP on leave",
                         conn->lastKeysymDown);
                 // mimic keyup
-                displayEvent->evType = VET_KEYUP;
-                displayEvent->detail = conn->lastKeysymDown;
+                displayEvent->evType = VET_KEY;
+                displayEvent->kev.isDown = 0;
+                displayEvent->kev.keysym = conn->lastKeysymDown;
                 conn->lastKeysymDown = NoSymbol;
             }
             break;
         case ButtonPress:
             displayEvent->evType = VET_MOUSE;
-            displayEvent->x = xev.xbutton.x;
-            displayEvent->y = xev.xbutton.y;
-            displayEvent->detail = convertMouseButtonState(xev.xbutton.state |
+            displayEvent->pev.x = xev.xbutton.x;
+            displayEvent->pev.y = xev.xbutton.y;
+            displayEvent->pev.buttonMask =
+                convertMouseButtonState(xev.xbutton.state |
                 (xev.xbutton.button == Button1 ? Button1Mask : 0) |
                 (xev.xbutton.button == Button2 ? Button2Mask : 0) |
                 (xev.xbutton.button == Button3 ? Button3Mask : 0) |
@@ -219,9 +223,10 @@ static void processPendingEvents(DisplayConnection *conn,
             break;
         case ButtonRelease:
             displayEvent->evType = VET_MOUSE;
-            displayEvent->x = xev.xbutton.x;
-            displayEvent->y = xev.xbutton.y;
-            displayEvent->detail = convertMouseButtonState(xev.xbutton.state &
+            displayEvent->pev.x = xev.xbutton.x;
+            displayEvent->pev.y = xev.xbutton.y;
+            displayEvent->pev.buttonMask =
+                convertMouseButtonState(xev.xbutton.state &
                 ~(xev.xbutton.button == Button1 ? Button1Mask : 0) &
                 ~(xev.xbutton.button == Button2 ? Button2Mask : 0) &
                 ~(xev.xbutton.button == Button3 ? Button3Mask : 0) &
@@ -230,25 +235,26 @@ static void processPendingEvents(DisplayConnection *conn,
             break;
         case MotionNotify:
             displayEvent->evType = VET_MOUSE;
-            displayEvent->x = xev.xbutton.x;
-            displayEvent->y = xev.xbutton.y;
-            displayEvent->detail = convertMouseButtonState(xev.xbutton.state);
+            displayEvent->pev.x = xev.xbutton.x;
+            displayEvent->pev.y = xev.xbutton.y;
+            displayEvent->pev.buttonMask =
+                convertMouseButtonState(xev.xbutton.state);
             break;
         case Expose:
-            vncdisp_flush(conn);
+            clidisp_flush(conn);
             break;
         case ClientMessage:
             // assume WM_DELETE_WINDOW
             displayEvent->evType = VET_CLOSE;
             break;
         default:
-            vnclog_info("unhandled event: %d", xev.type);
+            log_info("unhandled event: %d", xev.type);
             break;
         }
     }
 }
 
-int vncdisp_nextEvent(DisplayConnection *conn, SockStream *strm,
+int clidisp_nextEvent(DisplayConnection *conn, SockStream *strm,
         DisplayEvent *displayEvent, int wait)
 {
     Bool isEvFd = sock_isDataAvail(strm);
@@ -266,7 +272,7 @@ int vncdisp_nextEvent(DisplayConnection *conn, SockStream *strm,
         int selCnt = select((dispFd > sockFd ? dispFd : sockFd)+1,
                 &conn->fds, NULL, NULL, wait ? NULL : &tmout);
         if( selCnt < 0 )
-            vnclog_fatal_errno("select");
+            log_fatal_errno("select");
         if( selCnt == 0 )
             break;  // no wait, no data pending
         if( FD_ISSET(dispFd, &conn->fds) ) {
@@ -281,7 +287,7 @@ int vncdisp_nextEvent(DisplayConnection *conn, SockStream *strm,
     return isEvFd;
 }
 
-void vncdisp_putRectFromSocket(DisplayConnection *conn, SockStream *strm,
+void clidisp_putRectFromSocket(DisplayConnection *conn, SockStream *strm,
         int x, int y, int width, int height)
 {
     int bytesPerLine = conn->img->bytes_per_line;
@@ -292,7 +298,7 @@ void vncdisp_putRectFromSocket(DisplayConnection *conn, SockStream *strm,
 }
 
 
-void vncdisp_copyRect(DisplayConnection *conn, int srcX, int srcY,
+void clidisp_copyRect(DisplayConnection *conn, int srcX, int srcY,
         int destX, int destY, int width, int height)
 {
     int i, bytespp = (conn->img->bits_per_pixel + 7) / 8;
@@ -317,7 +323,7 @@ void vncdisp_copyRect(DisplayConnection *conn, int srcX, int srcY,
     }
 }
 
-void vncdisp_fillRect(DisplayConnection *conn, const char *pixel, int x, int y,
+void clidisp_fillRect(DisplayConnection *conn, const char *pixel, int x, int y,
         int width, int height)
 {
     int i, bytespp = (conn->img->bits_per_pixel + 7) / 8;
@@ -334,12 +340,13 @@ void vncdisp_fillRect(DisplayConnection *conn, const char *pixel, int x, int y,
     }
 }
 
-void vncdisp_close(DisplayConnection *conn)
+void clidisp_close(DisplayConnection *conn)
 {
     if( conn != NULL ) {
-        if( conn->shmInfo.shmaddr != NULL )
+        if( conn->shmInfo.shmaddr != NULL ) {
+            XShmDetach(conn->d, &conn->shmInfo);
             shmdt(conn->shmInfo.shmaddr);
-        else
+        }else
             XDestroyImage(conn->img);
         XDestroyWindow(conn->d, conn->win);
         XCloseDisplay(conn->d);

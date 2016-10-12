@@ -5,6 +5,8 @@ typedef struct SockStream SockStream;
 
 SockStream *sock_connectVNCHost(const char *hostVNC);
 
+SockStream *sock_accept(void);
+
 
 void sock_read(SockStream*, void *buf, int toRead);
 void sock_write(SockStream*, const void *buf, int toWrite);
@@ -19,12 +21,22 @@ unsigned sock_readU32(SockStream*);
  * "width" long each and beginning of each area is bytesPerLine from
  * previous one. First area starts at the buffer beginning.
  */
-void sock_readRect(SockStream *strm, char *buf, int bytesPerLine,
+void sock_readRect(SockStream*, char *buf, int bytesPerLine,
         int width, int height);
+
+
+/* Read data from input and ignore it.
+ */
+void sock_discard(SockStream*, unsigned bytes);
+
 
 void sock_writeU8(SockStream*, unsigned);
 void sock_writeU16(SockStream*, unsigned);
 void sock_writeU32(SockStream*, unsigned);
+
+
+void sock_writeRect(SockStream *strm, const char *buf, int bytesPerLine,
+        int width, int height);
 
 
 void sock_flush(SockStream*);

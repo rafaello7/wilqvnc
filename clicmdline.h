@@ -1,5 +1,5 @@
-#ifndef CMDLINE_H
-#define CMDLINE_H
+#ifndef CLICMDLINE_H
+#define CLICMDLINE_H
 
 typedef struct {
     const char *host;
@@ -12,4 +12,4 @@ typedef struct {
 
 void cmdline_parse(int argc, char *argv[], CmdLineParams*);
 
-#endif /* CMDLINE_H */
+#endif /* CLICMDLINE_H */

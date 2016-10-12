@@ -1,4 +1,4 @@
-#include "vncconn.h"
+#include "clivncconn.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -7,7 +7,7 @@
 #include "vnclog.h"
 
 
-VncVersion vncconn_exchangeVersion(SockStream *strm)
+VncVersion cliconn_exchangeVersion(SockStream *strm)
 {
     static const char VER33[] = "RFB 003.003\n";
     static const char VER37[] = "RFB 003.007\n";
@@ -23,13 +23,13 @@ VncVersion vncconn_exchangeVersion(SockStream *strm)
     else if( !memcmp(buf, VER38, 12) )
         vncVer = VNCVER_3_8;
     else
-        vnclog_fatal("unsupported server version %.11s", buf);
+        log_fatal("unsupported server version %.11s", buf);
     sock_write(strm, buf, 12);
     sock_flush(strm);
     return vncVer;
 }
 
-void vncconn_exchangeAuth(SockStream *strm, const char *passwdFile,
+void cliconn_exchangeAuth(SockStream *strm, const char *passwdFile,
         VncVersion vncVer)
 {
     static char pfileKey[] = "\350J\326`\304r\032\340";
@@ -40,10 +40,10 @@ void vncconn_exchangeAuth(SockStream *strm, const char *passwdFile,
         selectedAuthNo = sock_readU32(strm);
     }else{
         int authCnt = sock_readU8(strm);
-        vnclog_debug("authentication methods count: %d", authCnt);
+        log_debug("authentication methods count: %d", authCnt);
         for( ; authCnt > 0; --authCnt ) {
             int authNo = sock_readU8(strm);
-            vnclog_debug("  %d", authNo);
+            log_debug("  %d", authNo);
             if( selectedAuthNo == 0 || authNo < selectedAuthNo )
                 selectedAuthNo = authNo;
         }
@@ -54,7 +54,7 @@ void vncconn_exchangeAuth(SockStream *strm, const char *passwdFile,
             len = sizeof(buf) - 1;
         sock_read(strm, buf, len);
         buf[len] = '\0';
-        vnclog_fatal("server error: %s", buf);
+        log_fatal("server error: %s", buf);
     }
     if( selectedAuthNo == 1 ) {
         if( vncVer != VNCVER_3_3 ) {
@@ -65,11 +65,12 @@ void vncconn_exchangeAuth(SockStream *strm, const char *passwdFile,
         if( passwdFile != NULL ) {
             FILE *fp = fopen(passwdFile, "r");
             if( fp == NULL )
-                vnclog_fatal_errno("unable to open password file");
+                log_fatal_errno("unable to open password file");
             if( fread(pass, 8, 1, fp) != 1 )
-                vnclog_fatal("bad password file");
+                log_fatal("bad password file");
+            fclose(fp);
             if(ecb_crypt(pfileKey, pass, 8, DES_DECRYPT|DES_SW) != DESERR_NONE)
-                vnclog_fatal("ecb_crypt error");
+                log_fatal("ecb_crypt error");
         }else{
             char *p = getpass("Server password: ");
             if( p == NULL )
@@ -88,24 +89,39 @@ void vncconn_exchangeAuth(SockStream *strm, const char *passwdFile,
                 (c >> 1 & 8) | (c >> 3 & 4) | (c >> 5 & 2) | (c >> 7 & 1);
         }
         if( ecb_crypt(pass, buf, 16, DES_ENCRYPT | DES_SW) != DESERR_NONE )
-            vnclog_fatal("ecb_crypt error");
+            log_fatal("ecb_crypt error");
         sock_write(strm, buf, 16);
         sock_flush(strm);
     }else
-        vnclog_fatal("unsupported authentication type");
+        log_fatal("unsupported authentication type");
     if( selectedAuthNo != 1 || vncVer == VNCVER_3_8 ) {
         if( sock_readU32(strm) != 0 ) {     // authentication result
             if( vncVer == VNCVER_3_8 ) {
                 len = sock_readU32(strm);
                 sock_read(strm, buf, len);
-                vnclog_fatal("%.*s", len, buf);
+                log_fatal("%.*s", len, buf);
             }else
-                vnclog_fatal("Authentication failed.");
+                log_fatal("Authentication failed.");
         }
     }
 }
 
-void vncconn_setEncodings(SockStream *strm, int enableHextile)
+void cliconn_readPixelFormat(SockStream *strm, PixelFormat *pixelFormat)
+{
+    pixelFormat->bitsPerPixel = sock_readU8(strm);
+    pixelFormat->depth = sock_readU8(strm);
+    pixelFormat->bigEndian = sock_readU8(strm);
+    pixelFormat->trueColor = sock_readU8(strm);
+    pixelFormat->maxRed = sock_readU16(strm);
+    pixelFormat->maxGreen = sock_readU16(strm);
+    pixelFormat->maxBlue = sock_readU16(strm);
+    pixelFormat->shiftRed = sock_readU8(strm);
+    pixelFormat->shiftGreen = sock_readU8(strm);
+    pixelFormat->shiftBlue = sock_readU8(strm);
+    sock_discard(strm, 3);     // padding
+}
+
+void cliconn_setEncodings(SockStream *strm, int enableHextile)
 {
     int encodingCount = 3;
 
@@ -122,7 +138,7 @@ void vncconn_setEncodings(SockStream *strm, int enableHextile)
     sock_flush(strm);
 }
 
-void vncconn_setPixelFormat(SockStream *strm, const PixelFormat *pixelFormat)
+void cliconn_setPixelFormat(SockStream *strm, const PixelFormat *pixelFormat)
 {
     char padding[3] = "";
 
@@ -142,7 +158,7 @@ void vncconn_setPixelFormat(SockStream *strm, const PixelFormat *pixelFormat)
     sock_flush(strm);
 }
 
-void vncconn_sendFramebufferUpdateRequest(SockStream *strm, int incremental,
+void cliconn_sendFramebufferUpdateRequest(SockStream *strm, int incremental,
         int x, int y, int width, int height)
 {
     sock_writeU8(strm, 3);
@@ -154,21 +170,21 @@ void vncconn_sendFramebufferUpdateRequest(SockStream *strm, int incremental,
     sock_flush(strm);
 }
 
-void vncconn_sendKeyEvent(SockStream *strm, int isDown, unsigned keysym)
+void cliconn_sendKeyEvent(SockStream *strm, const VncKeyEvent *ev)
 {
     sock_writeU8(strm, 4);
-    sock_writeU8(strm, isDown ? 1 : 0);
+    sock_writeU8(strm, ev->isDown ? 1 : 0);
     sock_writeU16(strm, 0);
-    sock_writeU32(strm, keysym);
+    sock_writeU32(strm, ev->keysym);
     sock_flush(strm);
 }
 
-void vncconn_sendPointerEvent(SockStream *strm, unsigned state, int x, int y)
+void cliconn_sendPointerEvent(SockStream *strm, const VncPointerEvent *ev)
 {
     sock_writeU8(strm, 5);
-    sock_writeU8(strm, state);
-    sock_writeU16(strm, x);
-    sock_writeU16(strm, y);
+    sock_writeU8(strm, ev->buttonMask);
+    sock_writeU16(strm, ev->x);
+    sock_writeU16(strm, ev->y);
     sock_flush(strm);
 }
 
