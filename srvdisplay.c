@@ -16,9 +16,8 @@
 
 struct DisplayConnection {
     Display *d;
-    XShmSegmentInfo shmInfo1;
-    XShmSegmentInfo shmInfo2;
-    XImage *prevImg;
+    XShmSegmentInfo shmInfo;
+    char *prevImg;
     XImage *curImg;
     Damage damageId;
     int xdamage_evbase;
@@ -43,7 +42,6 @@ DisplayConnection *srvdisp_open(void)
     if( ! XTestQueryExtension(d, &xtest_evbase, &xtest_errbase, &xtest_majorver,
                 &xtest_minorver) )
         log_fatal("XTEST extension is not supported by server");
-    log_info("XTest version %d.%d", xtest_majorver, xtest_minorver);
     if( ! XFixesQueryExtension(d, &xfixes_evbase, &xfixes_errbase) )
         log_fatal("XFixes extension is not supported by server");
     DisplayConnection *conn = malloc(sizeof(DisplayConnection));
@@ -51,48 +49,34 @@ DisplayConnection *srvdisp_open(void)
     int defScreenNum = XDefaultScreen(d);
     Visual *defVis = XDefaultVisual(d, defScreenNum);
     int defDepth = XDefaultDepth(d, defScreenNum);
-    memset(&conn->shmInfo1, 0, sizeof(conn->shmInfo1));
-    memset(&conn->shmInfo2, 0, sizeof(conn->shmInfo2));
+    memset(&conn->shmInfo, 0, sizeof(conn->shmInfo));
     int width = XDisplayWidth(d, defScreenNum);
     int height = XDisplayHeight(d, defScreenNum);
     if( XShmQueryExtension(d) ) {
-        conn->prevImg = XShmCreateImage(d, defVis, defDepth, ZPixmap, NULL,
-                &conn->shmInfo1, width, height);
-        conn->shmInfo1.shmid = shmget(IPC_PRIVATE,
-                conn->prevImg->bytes_per_line * conn->prevImg->height,
-                IPC_CREAT|0777);
-        log_debug("shm1 id: %d", conn->shmInfo1.shmid);
-        conn->shmInfo1.shmaddr =
-            conn->prevImg->data = shmat (conn->shmInfo1.shmid, 0, 0);
-        conn->shmInfo1.readOnly = False;
-        Status st = XShmAttach(d, &conn->shmInfo1);
-        shmctl(conn->shmInfo1.shmid, IPC_RMID, NULL);
-        if( st == 0 )
-            log_fatal("XShmAttach failed");
         conn->curImg = XShmCreateImage(d, defVis, defDepth, ZPixmap, NULL,
-                &conn->shmInfo2, width, height);
-        conn->shmInfo2.shmid = shmget(IPC_PRIVATE,
+                &conn->shmInfo, width, height);
+        conn->shmInfo.shmid = shmget(IPC_PRIVATE,
                 conn->curImg->bytes_per_line * conn->curImg->height,
                 IPC_CREAT|0777);
-        log_debug("shm1 id: %d", conn->shmInfo2.shmid);
-        conn->shmInfo2.shmaddr =
-            conn->curImg->data = shmat (conn->shmInfo2.shmid, 0, 0);
-        conn->shmInfo2.readOnly = False;
-        st = XShmAttach(d, &conn->shmInfo2);
-        shmctl(conn->shmInfo2.shmid, IPC_RMID, NULL);
+        log_debug("shm id: %d", conn->shmInfo.shmid);
+        conn->shmInfo.shmaddr =
+            conn->curImg->data = shmat (conn->shmInfo.shmid, 0, 0);
+        conn->shmInfo.readOnly = False;
+        Status st = XShmAttach(d, &conn->shmInfo);
+        shmctl(conn->shmInfo.shmid, IPC_RMID, NULL);
         if( st == 0 )
             log_fatal("XShmAttach failed");
     }else{
         log_info("shm extension is not available");
-        conn->prevImg = XCreateImage(d, defVis, defDepth, ZPixmap, 0, NULL,
-                width, height, 32, 0);
-        conn->prevImg->data = malloc(conn->prevImg->bytes_per_line * height);
         conn->curImg = XCreateImage(d, defVis, defDepth, ZPixmap, 0, NULL,
                 width, height, 32, 0);
         conn->curImg->data = malloc(conn->curImg->bytes_per_line * height);
     }
+    int bytespp = (conn->curImg->bits_per_pixel + 7) / 8;
+    conn->prevImg = malloc(width * height * bytespp);
+    memset(conn->prevImg, 0, width * height * bytespp);
     conn->damageId = XDamageCreate(d, XDefaultRootWindow(d),
-                XDamageReportRawRectangles);
+                XDamageReportDeltaRectangles);
     XFixesSelectCursorInput(d, XDefaultRootWindow(conn->d),
             XFixesDisplayCursorNotifyMask);
     conn->xdamage_evbase = xdamage_evbase;
@@ -127,7 +111,7 @@ static void extractShiftMaxFromMask(unsigned long mask,
     while( (mask & 1) == 0 ) {
         mask >>= 1;
         ++shift;
-    } 
+    }
     *resMax = mask;
     *resShift = shift;
 }
@@ -165,8 +149,12 @@ void srvdisp_generateKeyEvent(DisplayConnection *conn, const VncKeyEvent *ev)
     KeyCode keycode = XKeysymToKeycode(conn->d, ev->keysym);
     if( keycode != 0 )
         XTestFakeKeyEvent(conn->d, keycode, ev->isDown, CurrentTime);
-    else
-        log_info("warn: unknown keycode for keysym %d", ev->keysym);
+    else{
+        static int isWarned = 0;
+        if( ! isWarned )
+            log_warn("unknown keycode for keysym %d\nplease load proper "
+                 "keyboard layout using setxkbmap or setmodmap", ev->keysym);
+    }
 }
 
 void srvdisp_generatePointerEvent(DisplayConnection *conn,
@@ -273,10 +261,7 @@ void srvdisp_refreshDamagedImageRegion(DisplayConnection *conn,
     if( conn->curDamage.width != 0 && conn->curDamage.height != 0 ) {
         XDamageSubtract(conn->d, conn->damageId, None, None);
         Window win = XDefaultRootWindow(conn->d);
-        XImage *img = conn->prevImg;
-        conn->prevImg = conn->curImg;
-        conn->curImg = img;
-        if( conn->shmInfo1.shmaddr != NULL ) {
+        if( conn->shmInfo.shmaddr != NULL ) {
             XShmGetImage(conn->d, win, conn->curImg, 0, 0, -1);
         }else{
             XGetSubImage(conn->d, win, 0, 0, conn->curImg->width,
@@ -287,10 +272,10 @@ void srvdisp_refreshDamagedImageRegion(DisplayConnection *conn,
         int bytesPerLine = conn->curImg->bytes_per_line;
         int bytespp = (conn->curImg->bits_per_pixel + 7) / 8;
         int dataOff = refreshedArea->y * bytesPerLine
-            + refreshedArea->x * bytespp; 
+            + refreshedArea->x * bytespp;
         int dataLen = refreshedArea->width * bytespp;
         while( refreshedArea->height > 0 &&
-                !memcmp(conn->prevImg->data + dataOff,
+                !memcmp(conn->prevImg + dataOff,
                     conn->curImg->data + dataOff, dataLen) )
         {
             ++refreshedArea->y;
@@ -298,9 +283,9 @@ void srvdisp_refreshDamagedImageRegion(DisplayConnection *conn,
             dataOff += bytesPerLine;
         }
         dataOff = (refreshedArea->y + refreshedArea->height - 1) * bytesPerLine
-            + refreshedArea->x * bytespp; 
+            + refreshedArea->x * bytespp;
         while( refreshedArea->height > 0 &&
-                !memcmp(conn->prevImg->data + dataOff,
+                !memcmp(conn->prevImg + dataOff,
                     conn->curImg->data + dataOff, dataLen) )
         {
             --refreshedArea->height;
@@ -309,11 +294,11 @@ void srvdisp_refreshDamagedImageRegion(DisplayConnection *conn,
         // TODO: handle depth 16 and 8
         if( bytespp == sizeof(int) ) {
             dataOff = refreshedArea->y * bytesPerLine
-                + refreshedArea->x * sizeof(int); 
+                + refreshedArea->x * sizeof(int);
             while( refreshedArea->width > 0 ) {
                 int i, off = dataOff, isColEq = 1;
                 for(i = 0; i < refreshedArea->height && isColEq; ++i) {
-                    isColEq = *(int*)(conn->prevImg->data + off) ==
+                    isColEq = *(int*)(conn->prevImg + off) ==
                         *(int*)(conn->curImg->data + off);
                     off += bytesPerLine;
                 }
@@ -324,11 +309,11 @@ void srvdisp_refreshDamagedImageRegion(DisplayConnection *conn,
                 --refreshedArea->width;
             }
             dataOff = refreshedArea->y * bytesPerLine
-                + (refreshedArea->x + refreshedArea->width - 1) * sizeof(int); 
+                + (refreshedArea->x + refreshedArea->width - 1) * sizeof(int);
             while( refreshedArea->width > 0 ) {
                 int i, off = dataOff, isColEq = 1;
                 for(i = 0; i < refreshedArea->height && isColEq; ++i) {
-                    isColEq = *(int*)(conn->prevImg->data + off) ==
+                    isColEq = *(int*)(conn->prevImg + off) ==
                         *(int*)(conn->curImg->data + off);
                     off += bytesPerLine;
                 }
@@ -337,6 +322,14 @@ void srvdisp_refreshDamagedImageRegion(DisplayConnection *conn,
                 dataOff -= sizeof(int);
                 --refreshedArea->width;
             }
+        }
+        dataOff = refreshedArea->y * bytesPerLine
+            + refreshedArea->x * bytespp;
+        dataLen = refreshedArea->width * bytespp;
+        for(int i = 0; i < refreshedArea->height; ++i) {
+            memcpy(conn->prevImg + dataOff, conn->curImg->data + dataOff,
+                    dataLen);
+            dataOff += bytesPerLine;
         }
     }else{
         refreshedArea->width = refreshedArea->height = 0;
@@ -442,15 +435,12 @@ void srvdisp_sendCursorToSocket(DisplayConnection *conn, SockStream *strm)
 void srvdisp_close(DisplayConnection *conn)
 {
     if( conn != NULL ) {
-        if( conn->shmInfo1.shmaddr != NULL ) {
-            XShmDetach(conn->d, &conn->shmInfo1);
-            shmdt(conn->shmInfo1.shmaddr);
-            XShmDetach(conn->d, &conn->shmInfo2);
-            shmdt(conn->shmInfo2.shmaddr);
-        }else{
-            XDestroyImage(conn->prevImg);
-            XDestroyImage(conn->curImg);
+        free(conn->prevImg);
+        if( conn->shmInfo.shmaddr != NULL ) {
+            XShmDetach(conn->d, &conn->shmInfo);
+            shmdt(conn->shmInfo.shmaddr);
         }
+        XDestroyImage(conn->curImg);
         XDamageDestroy(conn->d, conn->damageId);
         XFree(conn->cursorImg);
         XCloseDisplay(conn->d);

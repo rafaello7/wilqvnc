@@ -97,6 +97,7 @@ int main(int argc, char *argv[])
     PixelFormat pixelFormat;
     DamageArea cursorRegion;
 
+    log_setLevel(2);
     strm = sock_accept();
     DisplayConnection *conn = srvdisp_open();
     VncVersion vncVer = srvconn_exchangeVersion(strm);

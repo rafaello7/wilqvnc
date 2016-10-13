@@ -346,8 +346,8 @@ void clidisp_close(DisplayConnection *conn)
         if( conn->shmInfo.shmaddr != NULL ) {
             XShmDetach(conn->d, &conn->shmInfo);
             shmdt(conn->shmInfo.shmaddr);
-        }else
-            XDestroyImage(conn->img);
+        }
+        XDestroyImage(conn->img);
         XDestroyWindow(conn->d, conn->win);
         XCloseDisplay(conn->d);
     }
