@@ -7,6 +7,7 @@ void log_fatal(const char *fmt, ...);
 void log_fatal_errno(const char *fmt, ...);
 void log_error(const char *fmt, ...);
 void log_error_errno(const char *fmt, ...);
+void log_warn(const char *fmt, ...);
 void log_info(const char *fmt, ...);
 void log_debug(const char *fmt, ...);
 

@@ -19,12 +19,16 @@ static void dolog(int level, const char *fmt, va_list args, int errNum)
     if( level <= gLogLevel ) {
         if( level < 0 )
             printf("error: ");
+        else if( level == 0 )
+            printf("warn: ");
         vfprintf(stdout, fmt, args);
         if( errNum != 0 )
             printf(": %s", strerror(errNum));
         printf("\n");
         fflush(stdout);
     }
+    if( level < -1 )
+        exit(1);
 }
 
 void log_fatal(const char *fmt, ...)
@@ -32,9 +36,8 @@ void log_fatal(const char *fmt, ...)
     va_list args;
 
     va_start(args, fmt);
-    dolog(-1, fmt, args, 0);
+    dolog(-2, fmt, args, 0);
     va_end(args);
-    exit(1);
 }
 
 void log_fatal_errno(const char *fmt, ...)
@@ -43,9 +46,8 @@ void log_fatal_errno(const char *fmt, ...)
     int errNum = errno;
 
     va_start(args, fmt);
-    dolog(-1, fmt, args, errNum);
+    dolog(-2, fmt, args, errNum);
     va_end(args);
-    exit(1);
 }
 
 void log_error(const char *fmt, ...)
@@ -67,7 +69,7 @@ void log_error_errno(const char *fmt, ...)
     va_end(args);
 }
 
-void log_info(const char *fmt, ...)
+void log_warn(const char *fmt, ...)
 {
     va_list args;
 
@@ -76,12 +78,21 @@ void log_info(const char *fmt, ...)
     va_end(args);
 }
 
-void log_debug(const char *fmt, ...)
+void log_info(const char *fmt, ...)
 {
     va_list args;
 
     va_start(args, fmt);
     dolog(1, fmt, args, 0);
+    va_end(args);
+}
+
+void log_debug(const char *fmt, ...)
+{
+    va_list args;
+
+    va_start(args, fmt);
+    dolog(2, fmt, args, 0);
     va_end(args);
 }
 
