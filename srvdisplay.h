@@ -14,11 +14,16 @@ typedef enum {
 
 typedef struct {
     int x, y, width, height;
-} DamageArea;
+} RectangleArea;
 
 typedef struct {
     VncEventType evType;
 } DisplayEvent;
+
+typedef struct {
+    RectangleArea rect;
+    int srcX, srcY;
+} RectangleMotion;
 
 
 /* Connects to X server and opens a window to display the remote desktop.
@@ -34,23 +39,43 @@ void srvdisp_getPixelFormat(DisplayConnection*, PixelFormat*);
 /* Waits until next window event appears in event queue or some data is
  * available for read in socket.
  * Window event is stored in DisplayEvent structure.
- * Returns True when some data is aveilable on socket, False otherwise.
+ * Returns True when some data is available on socket, False otherwise.
  */
 int srvdisp_nextEvent(DisplayConnection*, SockStream*, DisplayEvent*, int wait);
 
 
+/* Emulates key press/relase event using XTEST extension.
+ */
 void srvdisp_generateKeyEvent(DisplayConnection*, const VncKeyEvent*);
+
+
+/* Emulates mouse event using XTEST extension.
+ */
 void srvdisp_generatePointerEvent(DisplayConnection*, const VncPointerEvent*);
 
 
+/* Moves current image area to previous one and fetches current desktop image.
+ * Stores in refreshedArea the area with differences between current
+ * and previous image.
+ *
+ * Note that images may differ outside the refreshedArea, but these differences
+ * will be not equated in next call - they will be reported instead as part of
+ * refreshedArea.
+ */
 void srvdisp_refreshDamagedImageRegion(DisplayConnection*,
-        DamageArea *refreshedArea);
+        RectangleArea *refreshedArea);
 
+
+int srvdisp_discoverMotion(DisplayConnection *conn, RectangleMotion*);
+
+
+const char *srvdisp_getPrevImage(const DisplayConnection*);
+const char *srvdisp_getCurImage(const DisplayConnection*);
 
 void srvdisp_sendRectToSocket(DisplayConnection*, SockStream*,
-        const DamageArea*);
+        const RectangleArea*);
 void srvdisp_getCursorRegion(DisplayConnection *conn,
-        DamageArea *cursorRegion);
+        RectangleArea *cursorRegion);
 void srvdisp_sendCursorToSocket(DisplayConnection*, SockStream*);
 
 

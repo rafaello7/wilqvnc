@@ -256,7 +256,7 @@ void sock_write(SockStream *strm, const void *buf, int count)
         while( 1 ) {
             int wr = writev(strm->sockFd, iov + iovBeg, iovEnd - iovBeg);
             if( wr < 0 )
-                log_fatal_errno("writev");
+                log_fatal_errno("writev beg=%d, end=%d", iovBeg, iovEnd);
             while( iovBeg < iovEnd && iov[iovBeg].iov_len <= wr ) {
                 wr -= iov[iovBeg].iov_len;
                 ++iovBeg;
@@ -300,6 +300,8 @@ void sock_writeRect(SockStream *strm, const char *buf, int bytesPerLine,
     enum { IOV_SIZE = 128 };
     struct iovec iov[IOV_SIZE];
     int i;
+    int hbeg = height;
+    const char *bbeg = buf;
 
     if( strm->writeOff + width * height <= sizeof(strm->writeBuf) ) {
         for(i = 0; i < height; ++i) {
@@ -326,8 +328,17 @@ void sock_writeRect(SockStream *strm, const char *buf, int bytesPerLine,
         }
         while( 1 ) {
             int wr = writev(strm->sockFd, iov + iovBeg, iovEnd - iovBeg);
-            if( wr < 0 )
-                log_fatal_errno("writev");
+            if( wr < 0 ) {
+                log_error_errno("writev error in sock_writeRect");
+                log_error("  buf=%p, bytesPerLine=%d, width=%d, height=%d",
+                        bbeg, bytesPerLine, width, hbeg);
+                log_error("  iovBeg=%d, iovEnd=%d", iovBeg, iovEnd);
+                for(i = iovBeg; i < iovEnd; ++i) {
+                    log_error("  %d base=%p len=%d", i, iov[i].iov_base,
+                            iov[i].iov_len);
+                }
+                abort();
+            }
             while( iovBeg < iovEnd && iov[iovBeg].iov_len <= wr ) {
                 wr -= iov[iovBeg].iov_len;
                 ++iovBeg;

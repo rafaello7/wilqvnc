@@ -13,6 +13,12 @@
 #include "srvdisplay.h"
 #include "vnclog.h"
 
+#include <sys/time.h>
+ 
+
+enum {
+    PTREVHIST_SIZE = 16
+};
 
 struct DisplayConnection {
     Display *d;
@@ -23,8 +29,9 @@ struct DisplayConnection {
     int xdamage_evbase;
     int xfixes_evbase;
     fd_set fds;
-    VncPointerEvent lastPointerEv;
-    DamageArea curDamage;       // currently damaged region
+    VncPointerEvent ptrEvHist[PTREVHIST_SIZE];
+    RectangleArea prevDamage;      // area different between curImg and prevImg
+    RectangleArea curDamage;       // currently damaged region, not fetched yet
     XFixesCursorImage *cursorImg;
 };
 
@@ -82,8 +89,13 @@ DisplayConnection *srvdisp_open(void)
     conn->xdamage_evbase = xdamage_evbase;
     conn->xfixes_evbase = xfixes_evbase;
     FD_ZERO(&conn->fds);
-    conn->lastPointerEv.x = conn->lastPointerEv.y = -1;
-    conn->lastPointerEv.buttonMask = 0;
+    VncPointerEvent ptrEv;
+    ptrEv.x = ptrEv.y = -1;
+    ptrEv.buttonMask = 0;
+    for(int i = 0; i < PTREVHIST_SIZE; ++i)
+        conn->ptrEvHist[i] = ptrEv;
+    conn->prevDamage.x = conn->prevDamage.y = 0;
+    conn->prevDamage.width = conn->prevDamage.height = 0;
     conn->curDamage.x = conn->curDamage.y = 0;
     conn->curDamage.width = width;
     conn->curDamage.height = height;
@@ -161,9 +173,9 @@ void srvdisp_generatePointerEvent(DisplayConnection *conn,
         const VncPointerEvent *ev)
 {
     unsigned curMask = ev->buttonMask;
-    unsigned maskDiff = conn->lastPointerEv.buttonMask ^ curMask;
+    unsigned maskDiff = conn->ptrEvHist[0].buttonMask ^ curMask;
 
-    if( ev->x != conn->lastPointerEv.x || ev->y != conn->lastPointerEv.y )
+    if( ev->x != conn->ptrEvHist[0].x || ev->y != conn->ptrEvHist[0].y )
         XTestFakeMotionEvent(conn->d, XDefaultScreen(conn->d), ev->x, ev->y,
                 CurrentTime);
     if( maskDiff & 1 )
@@ -176,7 +188,9 @@ void srvdisp_generatePointerEvent(DisplayConnection *conn,
         XTestFakeButtonEvent(conn->d, Button4, curMask & 8, CurrentTime);
     if( maskDiff & 16 )
         XTestFakeButtonEvent(conn->d, Button5, curMask & 16, CurrentTime);
-    conn->lastPointerEv = *ev;
+    for(int i = PTREVHIST_SIZE-1; i > 0; --i)
+        conn->ptrEvHist[i] = conn->ptrEvHist[i-1];
+    conn->ptrEvHist[0] = *ev;
 }
 
 static void processPendingEvents(DisplayConnection *conn,
@@ -256,9 +270,20 @@ int srvdisp_nextEvent(DisplayConnection *conn, SockStream *strm,
 }
 
 void srvdisp_refreshDamagedImageRegion(DisplayConnection *conn,
-        DamageArea *refreshedArea)
+        RectangleArea *refreshedArea)
 {
-    if( conn->curDamage.width != 0 && conn->curDamage.height != 0 ) {
+    int bytesPerLine = conn->curImg->bytes_per_line;
+    int bytespp = (conn->curImg->bits_per_pixel + 7) / 8;
+    int dataOff = conn->prevDamage.y * bytesPerLine
+        + conn->prevDamage.x * bytespp;
+    int dataLen = conn->prevDamage.width * bytespp;
+    for(int i = 0; i < conn->prevDamage.height; ++i) {
+        memcpy(conn->prevImg + dataOff, conn->curImg->data + dataOff,
+                dataLen);
+        dataOff += bytesPerLine;
+    }
+    RectangleArea damage = conn->curDamage;
+    if( damage.width != 0 && damage.height != 0 ) {
         XDamageSubtract(conn->d, conn->damageId, None, None);
         Window win = XDefaultRootWindow(conn->d);
         if( conn->shmInfo.shmaddr != NULL ) {
@@ -267,37 +292,29 @@ void srvdisp_refreshDamagedImageRegion(DisplayConnection *conn,
             XGetSubImage(conn->d, win, 0, 0, conn->curImg->width,
                     conn->curImg->height, -1, ZPixmap, conn->curImg, 0, 0);
         }
-        *refreshedArea = conn->curDamage;
-        conn->curDamage.width = conn->curDamage.height = 0;
-        int bytesPerLine = conn->curImg->bytes_per_line;
-        int bytespp = (conn->curImg->bits_per_pixel + 7) / 8;
-        int dataOff = refreshedArea->y * bytesPerLine
-            + refreshedArea->x * bytespp;
-        int dataLen = refreshedArea->width * bytespp;
-        while( refreshedArea->height > 0 &&
-                !memcmp(conn->prevImg + dataOff,
+        int dataOff = damage.y * bytesPerLine + damage.x * bytespp;
+        int dataLen = damage.width * bytespp;
+        while( damage.height > 0 && !memcmp(conn->prevImg + dataOff,
                     conn->curImg->data + dataOff, dataLen) )
         {
-            ++refreshedArea->y;
-            --refreshedArea->height;
+            ++damage.y;
+            --damage.height;
             dataOff += bytesPerLine;
         }
-        dataOff = (refreshedArea->y + refreshedArea->height - 1) * bytesPerLine
-            + refreshedArea->x * bytespp;
-        while( refreshedArea->height > 0 &&
-                !memcmp(conn->prevImg + dataOff,
+        dataOff = (damage.y + damage.height - 1) * bytesPerLine
+            + damage.x * bytespp;
+        while( damage.height > 0 && !memcmp(conn->prevImg + dataOff,
                     conn->curImg->data + dataOff, dataLen) )
         {
-            --refreshedArea->height;
+            --damage.height;
             dataOff -= bytesPerLine;
         }
         // TODO: handle depth 16 and 8
         if( bytespp == sizeof(int) ) {
-            dataOff = refreshedArea->y * bytesPerLine
-                + refreshedArea->x * sizeof(int);
-            while( refreshedArea->width > 0 ) {
+            dataOff = damage.y * bytesPerLine + damage.x * sizeof(int);
+            while( damage.width > 0 ) {
                 int i, off = dataOff, isColEq = 1;
-                for(i = 0; i < refreshedArea->height && isColEq; ++i) {
+                for(i = 0; i < damage.height && isColEq; ++i) {
                     isColEq = *(int*)(conn->prevImg + off) ==
                         *(int*)(conn->curImg->data + off);
                     off += bytesPerLine;
@@ -305,14 +322,14 @@ void srvdisp_refreshDamagedImageRegion(DisplayConnection *conn,
                 if( ! isColEq )
                     break;
                 dataOff += sizeof(int);
-                ++refreshedArea->x;
-                --refreshedArea->width;
+                ++damage.x;
+                --damage.width;
             }
-            dataOff = refreshedArea->y * bytesPerLine
-                + (refreshedArea->x + refreshedArea->width - 1) * sizeof(int);
-            while( refreshedArea->width > 0 ) {
+            dataOff = damage.y * bytesPerLine
+                + (damage.x + damage.width - 1) * sizeof(int);
+            while( damage.width > 0 ) {
                 int i, off = dataOff, isColEq = 1;
-                for(i = 0; i < refreshedArea->height && isColEq; ++i) {
+                for(i = 0; i < damage.height && isColEq; ++i) {
                     isColEq = *(int*)(conn->prevImg + off) ==
                         *(int*)(conn->curImg->data + off);
                     off += bytesPerLine;
@@ -320,27 +337,276 @@ void srvdisp_refreshDamagedImageRegion(DisplayConnection *conn,
                 if( ! isColEq )
                     break;
                 dataOff -= sizeof(int);
-                --refreshedArea->width;
+                --damage.width;
             }
         }
-        dataOff = refreshedArea->y * bytesPerLine
-            + refreshedArea->x * bytespp;
-        dataLen = refreshedArea->width * bytespp;
-        for(int i = 0; i < refreshedArea->height; ++i) {
-            memcpy(conn->prevImg + dataOff, conn->curImg->data + dataOff,
-                    dataLen);
-            dataOff += bytesPerLine;
-        }
-    }else{
-        refreshedArea->width = refreshedArea->height = 0;
     }
+    *refreshedArea = conn->prevDamage = damage;
+    conn->curDamage.width = conn->curDamage.height = 0;
+}
+
+static int isColumnEqual(const unsigned *prev, const unsigned *cur,
+        int itemsPerLine, int prevX, int prevY, int height,
+        int motionX, int motionY)
+{
+    int offP = prevY * itemsPerLine + prevX;
+    int offC = offP + motionY * itemsPerLine + motionX;
+    int i;
+
+    for(i = 0; i < height && prev[offP] == cur[offC]; ++i) {
+        offP += itemsPerLine;
+        offC += itemsPerLine;
+    }
+    return i == height;
+}
+
+static int isRowEqual(const unsigned *prev, const unsigned *cur,
+        int itemsPerLine, int prevX, int prevY, int width,
+        int motionX, int motionY)
+{
+    int offP = prevY * itemsPerLine + prevX;
+    int offC = offP + motionY * itemsPerLine + motionX;
+
+    return !memcmp(prev + offP, cur + offC, width * sizeof(unsigned));
+}
+
+/* Searches for greatest moved rectangle area within damage.
+ * The (mx, my) denote upper left corner on previous image of 16x16 pixel
+ * rectangle moved vertically by motion value. The rectangle coordinates
+ * are relative to upper left corner of damage area.
+ */
+static void findGreatestModionArea(const RectangleArea *damage,
+        const unsigned *prev,
+        const unsigned *cur, int itemsPerLine, int midX, int midY, int motion)
+{
+    int mx = midX, my = midY, mwidth = 16, mheight = 16;
+
+    while( my > 0 && my + motion > 0 && isRowEqual(prev, cur, itemsPerLine,
+                damage->x + midX, damage->y + my - 1, 16, 0, motion))
+    {
+        --my;
+        ++mheight;
+    }
+    while( my + mheight < damage->height &&
+            my + mheight + motion < damage->height &&
+            isRowEqual(prev, cur, itemsPerLine,
+                damage->x + midX, damage->y + my + mheight, 16, 0, motion))
+    {
+        ++mheight;
+    }
+    while( mx > 0 && isColumnEqual(prev, cur, itemsPerLine,
+                damage->x + mx - 1, damage->y + my, mheight, 0, motion))
+    {
+        --mx;
+        ++mwidth;
+    }
+    while( mx + mwidth < damage->width && isColumnEqual(prev, cur, itemsPerLine,
+                damage->x + mx + mwidth, damage->y + my, mheight, 0, motion))
+    {
+        ++mwidth;
+    }
+    log_info("   ** found movement at %d,%d %dx%d by %d", mx, my,
+            mwidth, mheight, motion);
+}
+
+static unsigned long long curTimeMs(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
+}
+
+static Bool discoverMotionByMouseMove(const VncPointerEvent *ptrEvHist,
+        const RectangleArea *damage, const unsigned *prev,
+        const unsigned *cur, int itemsPerLine, RectangleMotion *motion)
+{
+    XPoint checked[PTREVHIST_SIZE * (PTREVHIST_SIZE+1)/2];
+    int checkedCount = 0;
+    unsigned long long tmBeg = curTimeMs();
+
+    for(int i = 1; i < PTREVHIST_SIZE; ++i) {
+        // assume a window is moved when left mouse button is pressed
+        if( ! (ptrEvHist[i].buttonMask & 1) )
+            continue;
+        for(int j = i-1; j >= 0 && (ptrEvHist[j+1].buttonMask & 1); --j) {
+            int motionX = ptrEvHist[j].x - ptrEvHist[i].x;
+            int motionY = ptrEvHist[j].y - ptrEvHist[i].y;
+            if( 0 && motionX == 0 ) {
+                continue;   // leave for vertical motion discovery
+            }
+            int MM = 64;
+            if((motionX >= 0 ? motionX : -motionX) + 2*MM > damage->width ||
+                (motionY >= 0 ? motionY : -motionY) + 2*MM > damage->height)
+                continue;
+            int chk;
+            for(chk = 0; chk < checkedCount &&
+                (checked[chk].x != motionX || checked[chk].y != motionY);
+                ++chk)
+            {
+            }
+            if( chk < checkedCount )
+                continue;
+            checked[checkedCount].x = motionX;
+            checked[checkedCount].y = motionY;
+            ++checkedCount;
+            int xb, yb, xwidth, yheight;
+            if( motionX >= 0 ) {
+                xb = damage->x + MM;
+                xwidth = damage->width - motionX - 2 * MM;
+            }else{
+                xb = damage->x - motionX + MM;
+                xwidth = damage->width - 2 * MM;
+            }
+            if( motionY >= 0 ) {
+                yb = damage->y + MM;
+                yheight = damage->height - motionY - 2 * MM;
+            }else{
+                yb = damage->y - motionY + MM;
+                yheight = damage->height - 2 * MM;
+            }
+            int row;
+            int offP = yb * itemsPerLine + xb;
+            int offC = offP + motionY * itemsPerLine + motionX;
+            for(row = 0; row < yheight && !memcmp(prev + offP, cur + offC,
+                        xwidth * sizeof(int)); ++row)
+            {
+                offP += itemsPerLine;
+                offC += itemsPerLine;
+            }
+            if( row == yheight ) {
+                while( MM > 0 ) {
+                    if( !isRowEqual(prev, cur, itemsPerLine, xb, yb - 1, xwidth,
+                                motionX, motionY) )
+                        break;
+                    --yb;
+                    ++yheight;
+                    if( !isRowEqual(prev, cur, itemsPerLine, xb, yb + yheight,
+                                xwidth, motionX, motionY) )
+                        break;
+                    ++yheight;
+                    if( !isColumnEqual(prev, cur, itemsPerLine, xb - 1, yb,
+                                yheight, motionX, motionY) )
+                        break;
+                    --xb;
+                    ++xwidth;
+                    if( !isColumnEqual(prev, cur, itemsPerLine, xb + xwidth, yb,
+                                yheight, motionX, motionY) )
+                        break;
+                    ++xwidth;
+                    --MM;
+                }
+                motion->rect.x = xb + motionX;
+                motion->rect.y = yb + motionY;
+                motion->rect.width = xwidth;
+                motion->rect.height = yheight;
+                motion->srcX = xb;
+                motion->srcY = yb;
+                unsigned long long tmCur = curTimeMs();
+                log_info("   ** motion by mouse %dx%d by %d,%d (checked %d)"
+                        " %llu ms",
+                        xwidth, yheight, motionX, motionY, checkedCount,
+                        tmCur - tmBeg);
+                return True;
+            }
+        }
+    }
+    return False;
+}
+
+static int discoverVerticalMotion(const RectangleArea *damage,
+        const unsigned *prev, const unsigned *cur, int itemsPerLine)
+{
+    return False;
+    /* Try to discover vertical motion.
+     * calculate hash of 16x16 pixels area in the middle of previous image.
+     * Compare with hash of each 16x16-pixel area in the same column
+     * in current image. If equal, check as movement candidate
+     */
+    int midX = damage->width / 2 - 8;
+    int midY = damage->height / 2 - 8;
+    int dataOffPrev = (damage->y+midY) * itemsPerLine + damage->x + midX;
+    int dataOffCur = damage->y * itemsPerLine + damage->x + midX;
+    unsigned sumPrev = 0, sumCur = 0;
+    unsigned hi = 1 << (8 * sizeof(unsigned) - 1);
+    unsigned window[16];
+    for(int i = 0; i < 16; ++i) {
+        unsigned toAdd = prev[dataOffPrev+1] + 3 * prev[dataOffPrev+5] +
+            9 * prev[dataOffPrev+9] + 13 * prev[dataOffPrev+13];
+        sumPrev = ((sumPrev << 1) | ((sumPrev&hi)!=0)) ^ toAdd;
+        toAdd = cur[dataOffCur+1] + 3 * cur[dataOffCur+5] +
+            9 * cur[dataOffCur+9] + 13 * cur[dataOffCur+13];
+        window[i] = toAdd;
+        sumCur = ((sumCur << 1) | ((sumCur&hi)!=0)) ^ toAdd;
+        dataOffPrev += itemsPerLine;
+        dataOffCur += itemsPerLine;
+    }
+    for(int i = 16; i < damage->height; ++i) {
+        if( sumCur == sumPrev ) {
+            log_info("   cand %d", i - 16 - midY);
+            int dataOffP = (damage->y+midY) * itemsPerLine + damage->x + midX;
+            int dataOffC = (damage->y+i-16) * itemsPerLine + damage->x + midX;
+            int j;
+            for(j = 0; j < 16 && ! memcmp(prev+dataOffP,
+                        cur+dataOffC, 16 * sizeof(int)); ++j)
+            {
+                dataOffP += itemsPerLine;
+                dataOffC += itemsPerLine;
+            }
+            if( j == 16 ) {
+                findGreatestModionArea(damage, prev, cur, itemsPerLine,
+                        midX, midY, i - 16 - midY);
+                return True;
+            }
+        }
+        unsigned itemSub = window[i % 16];
+        unsigned toAdd = cur[dataOffCur+1] + 3 * cur[dataOffCur+5] +
+            9 * cur[dataOffCur+9] + 13 * cur[dataOffCur+13];
+        window[i%16] = toAdd;
+        sumCur = ((sumCur << 1) | ((sumCur&hi)!=0)) ^ toAdd;
+        sumCur ^= itemSub << 16 | itemSub >> (8*sizeof(int)-16);
+        dataOffCur += itemsPerLine;
+    }
+    return False;
+}
+
+int srvdisp_discoverMotion(DisplayConnection *conn, RectangleMotion *motion)
+{
+    RectangleArea *damage = &conn->prevDamage;
+    int bytespp = (conn->curImg->bits_per_pixel + 7) / 8;
+    int bytesPerLine = conn->curImg->bytes_per_line;
+
+    if( damage->width >= 32 && damage->height >= 32 && bytespp == sizeof(int)
+            && bytesPerLine % sizeof(int) == 0)
+    {
+        static int nn = 0;
+        log_info("%3d %dx%d", ++nn, damage->width, damage->height);
+        const unsigned *prev = (const unsigned*)conn->prevImg;
+        const unsigned *cur = (const unsigned*)conn->curImg->data;
+        if( discoverMotionByMouseMove(conn->ptrEvHist, damage, prev, cur,
+                bytesPerLine / sizeof(int), motion) )
+            return True;
+        if( discoverVerticalMotion(damage, prev, cur,
+                    bytesPerLine / sizeof(int)) )
+            return True;
+    }
+    return False;
+}
+
+const char *srvdisp_getPrevImage(const DisplayConnection *conn)
+{
+    return conn->prevImg;
+}
+
+const char *srvdisp_getCurImage(const DisplayConnection *conn)
+{
+    return conn->curImg->data;
 }
 
 void srvdisp_getCursorRegion(DisplayConnection *conn,
-        DamageArea *cursorRegion)
+        RectangleArea *cursorRegion)
 {
-    cursorRegion->x = conn->lastPointerEv.x - conn->cursorImg->xhot;
-    cursorRegion->y = conn->lastPointerEv.y - conn->cursorImg->yhot;
+    cursorRegion->x = conn->ptrEvHist[0].x - conn->cursorImg->xhot;
+    cursorRegion->y = conn->ptrEvHist[0].y - conn->cursorImg->yhot;
     cursorRegion->width = conn->cursorImg->width;
     cursorRegion->height = conn->cursorImg->height;
     if( cursorRegion->y < 0 ) {
@@ -355,10 +621,12 @@ void srvdisp_getCursorRegion(DisplayConnection *conn,
     }
     if( cursorRegion->x + cursorRegion->width > conn->curImg->width )
         cursorRegion->width = conn->curImg->width - cursorRegion->x;
+    if( cursorRegion->width <= 0 || cursorRegion->height <= 0 )
+        cursorRegion->width = cursorRegion->height = 0;
 }
 
 void srvdisp_sendRectToSocket(DisplayConnection *conn, SockStream *strm,
-        const DamageArea *damage)
+        const RectangleArea *damage)
 {
     int bytesPerLine = conn->curImg->bytes_per_line;
     int bytespp = (conn->curImg->bits_per_pixel + 7) / 8;
@@ -374,8 +642,8 @@ void srvdisp_sendCursorToSocket(DisplayConnection *conn, SockStream *strm)
     int bytespp = (conn->curImg->bits_per_pixel + 7) / 8;
     int i, j;
 
-    int curX = conn->lastPointerEv.x - conn->cursorImg->xhot;
-    int curY = conn->lastPointerEv.y - conn->cursorImg->yhot;
+    int curX = conn->ptrEvHist[0].x - conn->cursorImg->xhot;
+    int curY = conn->ptrEvHist[0].y - conn->cursorImg->yhot;
     int curW = conn->cursorImg->width;
     int curH = conn->cursorImg->height;
     const unsigned long *curData = conn->cursorImg->pixels;
