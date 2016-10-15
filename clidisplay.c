@@ -369,8 +369,12 @@ static void decodeZStd(DisplayConnection *conn, SockStream *strm,
     int areaSize = width * height * bytespp;
     char *uncompressed = malloc(areaSize);
     int res = ZSTD_decompress(uncompressed, areaSize, compressed, size);
-    if( res != areaSize )
+    if( res != areaSize ) {
+        if( ZSTD_isError(res) )
+            log_fatal("ZSTD_decompress: size=%d, areaSize=%d, res=%d, %s",
+                    size, areaSize, res, ZSTD_getErrorName(res));
         log_fatal("ZSTD_decompress: areaSize=%d, res=%d", areaSize, res);
+    }
     int srcOff = 0;
     int srcLineBytes = width * bytespp;
     int dataOff = y * bytesPerLine + x * bytespp;
@@ -383,6 +387,20 @@ static void decodeZStd(DisplayConnection *conn, SockStream *strm,
     free(uncompressed);
 }
 
+static void decodeRaw(DisplayConnection *conn, SockStream *strm,
+        int x, int y, int width, int height)
+{
+    int bytesPerLine = conn->img->bytes_per_line;
+    int bytespp = (conn->img->bits_per_pixel + 7) / 8;
+    int size = sock_readU32(strm);
+
+    if( size != width * height * bytespp )
+        log_fatal("decodeRaw: size does not match, got %d, expected %d",
+                size, width * height * bytespp);
+    sock_readRect(strm, conn->img->data + y * bytesPerLine + x * bytespp,
+            bytesPerLine, width * bytespp, height);
+}
+
 void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
         int x, int y, int width, int height)
 {
@@ -390,16 +408,16 @@ void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
 
     switch( method ) {
     case 0:
-        log_info("decodeWILQ: %dx%d DIFF");
         decodeDiff(conn, strm, x, y, width, height);
         break;
     case 1:
-        log_info("decodeWILQ: %dx%d LZ4");
         decodeLZ4(conn, strm, x, y, width, height);
         break;
     case 2:
-        log_info("decodeWILQ: %dx%d ZSTD");
         decodeZStd(conn, strm, x, y, width, height);
+        break;
+    case 3:
+        decodeRaw(conn, strm, x, y, width, height);
         break;
     default:
         log_fatal("unsupported WILQ compression method %d", method);

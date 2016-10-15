@@ -664,13 +664,12 @@ static void sendLZ4(DisplayConnection *conn, SockStream *strm,
     }
     int destBytes = LZ4_compressBound(imgBytes);
     char *bufdest = malloc(destBytes);
-    int comp = LZ4_compress_default(bufsrc, bufdest, imgBytes, destBytes);
+    int comp = LZ4_compress_fast(bufsrc, bufdest, imgBytes, destBytes, 11);
     unsigned long long tmCur = curTimeMs();
     static int nn = 0;
     log_info("%3d %dx%d  %d -> %d/%d, %d%%  %llu ms", ++nn, damage->width,
             damage->height, imgBytes,
             comp, destBytes, 100 * comp / imgBytes, tmCur - tmBeg);
-    sock_writeU32(strm, 0x514c4977);
     sock_writeU32(strm, comp);
     sock_write(strm, bufdest, comp);
     free(bufsrc);
@@ -709,6 +708,39 @@ static void sendZStd(DisplayConnection *conn, SockStream *strm,
     free(bufdest);
 }
 
+static void sendRaw(DisplayConnection *conn, SockStream *strm,
+        RectangleArea *damage)
+{
+    int bytespp = (conn->curImg->bits_per_pixel + 7) / 8;
+    int bytesPerLine = conn->curImg->bytes_per_line;
+
+    unsigned long long tmBeg = curTimeMs();
+    int dataOff = damage->y * bytesPerLine + damage->x * bytespp;
+    int lineBytes = damage->width * bytespp;
+    int imgBytes = lineBytes * damage->height;
+    char *bufsrc = malloc(imgBytes);
+    int srcOff = 0;
+
+    for(int i = 0; i < damage->height; ++i) {
+        memcpy(bufsrc + srcOff, conn->curImg->data + dataOff, lineBytes);
+        dataOff += bytesPerLine;
+        srcOff += lineBytes;
+    }
+    int destBytes = imgBytes;
+    char *bufdest = malloc(destBytes);
+    memcpy(bufdest, bufsrc, imgBytes);
+    int comp = imgBytes;
+    unsigned long long tmCur = curTimeMs();
+    static int nn = 0;
+    log_info("%3d %dx%d  %d -> %d/%d, %d%%  %llu ms", ++nn, damage->width,
+            damage->height, imgBytes,
+            comp, destBytes, 100 * comp / imgBytes, tmCur - tmBeg);
+    sock_writeU32(strm, comp);
+    sock_write(strm, bufdest, comp);
+    free(bufsrc);
+    free(bufdest);
+}
+
 void srvdisp_sendWILQ(DisplayConnection *conn, SockStream *strm,
         RectangleArea *damage)
 {
@@ -725,6 +757,9 @@ void srvdisp_sendWILQ(DisplayConnection *conn, SockStream *strm,
         break;
     case 2:
         sendZStd(conn, strm, damage);
+        break;
+    case 3:
+        sendRaw(conn, strm, damage);
         break;
     }
 }
