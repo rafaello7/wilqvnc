@@ -7,6 +7,8 @@
 #include <sys/uio.h>
 #include <string.h>
 #include <sys/select.h>
+#include <lz4.h>
+#include <zstd.h>
 #include "clidisplay.h"
 #include "vnclog.h"
 
@@ -297,6 +299,112 @@ void clidisp_putRectFromSocket(DisplayConnection *conn, SockStream *strm,
             bytesPerLine, width * bytespp, height);
 }
 
+static void decodeDiff(DisplayConnection *conn, SockStream *strm,
+        int x, int y, int width, int height)
+{
+    int bytesPerLine = conn->img->bytes_per_line;
+    int itemsPerLine = bytesPerLine / sizeof(int);
+    int count = sock_readU32(strm);
+
+    unsigned *buf = malloc(count * sizeof(int));
+    unsigned *img = (unsigned*)(conn->img->data + y * bytesPerLine
+            + x * sizeof(int));
+    sock_read(strm, buf, count * sizeof(int));
+    int col = 0, row = 0;
+    for(int i = 0; i < count; ++i) {
+        if( row >= height )
+            log_fatal("decodeDiff: bad data, %dx%d, row=%d, col=%d, "
+                    "i=%d count=%d", width, height, row, col, i, count);
+        unsigned b = buf[i];
+        img[col] = b & 0xffffff;
+        col += (b >> 24) + 1;
+        while( col >= width ) {
+            img += itemsPerLine;
+            ++row;
+            col -= width;
+        }
+        //log_info("%d %d->(%d, %d)", i, (b >> 24) + 1, col, row);
+    }
+    if( row != height || col != 0 )
+        log_fatal("decodeDiff: bad data, %dx%d, row=%d, col=%d, "
+                    "count=%d", width, height, row, col, count);
+    free(buf);
+}
+
+static void decodeLZ4(DisplayConnection *conn, SockStream *strm,
+        int x, int y, int width, int height)
+{
+    int bytesPerLine = conn->img->bytes_per_line;
+    int bytespp = (conn->img->bits_per_pixel + 7) / 8;
+    int size = sock_readU32(strm);
+
+    char *compressed = malloc(size);
+    sock_read(strm, compressed, size);
+    int areaSize = width * height * bytespp;
+    char *uncompressed = malloc(areaSize);
+    int res = LZ4_decompress_safe(compressed, uncompressed, size, areaSize);
+    if( res != areaSize )
+        log_fatal("LZ4_decompress_safe: areaSize=%d, res=%d", areaSize, res);
+    int srcOff = 0;
+    int srcLineBytes = width * bytespp;
+    int dataOff = y * bytesPerLine + x * bytespp;
+    for(int i = 0; i < height; ++i) {
+        memcpy(conn->img->data + dataOff, uncompressed + srcOff,  srcLineBytes);
+        dataOff += bytesPerLine;
+        srcOff += srcLineBytes;
+    }
+    free(compressed);
+    free(uncompressed);
+}
+
+static void decodeZStd(DisplayConnection *conn, SockStream *strm,
+        int x, int y, int width, int height)
+{
+    int bytesPerLine = conn->img->bytes_per_line;
+    int bytespp = (conn->img->bits_per_pixel + 7) / 8;
+    int size = sock_readU32(strm);
+
+    char *compressed = malloc(size);
+    sock_read(strm, compressed, size);
+    int areaSize = width * height * bytespp;
+    char *uncompressed = malloc(areaSize);
+    int res = ZSTD_decompress(uncompressed, areaSize, compressed, size);
+    if( res != areaSize )
+        log_fatal("ZSTD_decompress: areaSize=%d, res=%d", areaSize, res);
+    int srcOff = 0;
+    int srcLineBytes = width * bytespp;
+    int dataOff = y * bytesPerLine + x * bytespp;
+    for(int i = 0; i < height; ++i) {
+        memcpy(conn->img->data + dataOff, uncompressed + srcOff,  srcLineBytes);
+        dataOff += bytesPerLine;
+        srcOff += srcLineBytes;
+    }
+    free(compressed);
+    free(uncompressed);
+}
+
+void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
+        int x, int y, int width, int height)
+{
+    int method = sock_readU32(strm);
+
+    switch( method ) {
+    case 0:
+        log_info("decodeWILQ: %dx%d DIFF");
+        decodeDiff(conn, strm, x, y, width, height);
+        break;
+    case 1:
+        log_info("decodeWILQ: %dx%d LZ4");
+        decodeLZ4(conn, strm, x, y, width, height);
+        break;
+    case 2:
+        log_info("decodeWILQ: %dx%d ZSTD");
+        decodeZStd(conn, strm, x, y, width, height);
+        break;
+    default:
+        log_fatal("unsupported WILQ compression method %d", method);
+    }
+}
 
 void clidisp_copyRect(DisplayConnection *conn, int srcX, int srcY,
         int destX, int destY, int width, int height)

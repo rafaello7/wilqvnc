@@ -56,6 +56,10 @@ void clidisp_fillRect(DisplayConnection*, const char *pixel,
         int x, int y, int width, int height);
 
 
+void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
+        int x, int y, int width, int height);
+
+
 /* Flush updates made on display
  */
 void clidisp_flush(DisplayConnection*);

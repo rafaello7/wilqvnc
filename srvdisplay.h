@@ -74,6 +74,7 @@ const char *srvdisp_getCurImage(const DisplayConnection*);
 
 void srvdisp_sendRectToSocket(DisplayConnection*, SockStream*,
         const RectangleArea*);
+void srvdisp_sendWILQ(DisplayConnection*, SockStream*, RectangleArea *damage);
 void srvdisp_getCursorRegion(DisplayConnection *conn,
         RectangleArea *cursorRegion);
 void srvdisp_sendCursorToSocket(DisplayConnection*, SockStream*);

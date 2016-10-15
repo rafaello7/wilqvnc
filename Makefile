@@ -4,10 +4,10 @@ SRV_OBJS = vnclog.o sockstream.o srvvncconn.o srvdisplay.o wilqvncsrv.o
 all:: wilqvncsrv wilqvnc
 
 wilqvnc: $(CLI_OBJS)
-	gcc $(CLI_OBJS) -o wilqvnc -lX11 -lXext
+	gcc $(CLI_OBJS) -o wilqvnc -lX11 -lXext -llz4 -lzstd
 
 wilqvncsrv: $(SRV_OBJS)
-	gcc $(SRV_OBJS) -o wilqvncsrv -lX11 -lXdamage -lXext -lXtst -lXfixes
+	gcc $(SRV_OBJS) -o wilqvncsrv -lX11 -lXdamage -lXext -lXtst -lXfixes -llz4 -lzstd
 
 
 .c.o:

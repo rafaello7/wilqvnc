@@ -28,6 +28,14 @@ static int isRectIntersectionEmpty(const RectangleArea *area1,
         area1->y + area1->height <= area2->y;
 }
 
+static void sendRect(DisplayConnection *conn, SockStream *strm,
+        RectangleArea *rect)
+{
+    //sock_writeU32(strm, 0);     // encoding type
+    //srvdisp_sendRectToSocket(conn, strm, rect);
+    srvdisp_sendWILQ(conn, strm, rect);
+}
+
 static int writeUpdate(DisplayConnection *conn, SockStream *strm,
         int isCursorChanged, RectangleArea *oldCursorArea)
 {
@@ -50,7 +58,8 @@ static int writeUpdate(DisplayConnection *conn, SockStream *strm,
         ( !putCursor || ! isRectCoveredBy(oldCursorArea, &cursorArea) );
     if( putDamage ) {
         splitCnt = 1;
-        if( (sendCopyRect = srvdisp_discoverMotion(conn, &motion)) != 0 ) {
+        if( (sendCopyRect = 0 /*srvdisp_discoverMotion(conn, &motion)*/) != 0 )
+        {
             damageSplit[0] = motion.rect;
             // above motion
             if( motion.rect.y > damage.y ) {
@@ -108,8 +117,7 @@ static int writeUpdate(DisplayConnection *conn, SockStream *strm,
                     sock_writeU16(strm, motion.srcX);
                     sock_writeU16(strm, motion.srcY);
                 }else{
-                    sock_writeU32(strm, 0);     // encoding type
-                    srvdisp_sendRectToSocket(conn, strm, damageSplit + i);
+                    sendRect(conn, strm, damageSplit + i);
                 }
             }
         }

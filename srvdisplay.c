@@ -10,6 +10,8 @@
 #include <sys/uio.h>
 #include <string.h>
 #include <sys/select.h>
+#include <lz4.h>
+#include <zstd.h>
 #include "srvdisplay.h"
 #include "vnclog.h"
 
@@ -590,6 +592,141 @@ int srvdisp_discoverMotion(DisplayConnection *conn, RectangleMotion *motion)
             return True;
     }
     return False;
+}
+
+static void sendDiff(DisplayConnection *conn, SockStream *strm,
+        RectangleArea *damage)
+{
+    int bytespp = (conn->curImg->bits_per_pixel + 7) / 8;
+    int bytesPerLine = conn->curImg->bytes_per_line;
+
+    if( damage->width > 0 && damage->height > 0 && bytespp == sizeof(int)
+            && bytesPerLine % sizeof(int) == 0)
+    {
+        unsigned long long tmBeg = curTimeMs();
+        const unsigned *prev = (const unsigned*)conn->prevImg;
+        const unsigned *cur = (const unsigned*)conn->curImg->data;
+        int itemsPerLine = bytesPerLine / sizeof(int);
+        int dataOff = damage->y * itemsPerLine + damage->x;
+        unsigned *buf = malloc(damage->width * damage->height * sizeof(int));
+        int bufp = 0;
+
+        unsigned curPixel;
+        unsigned prevDist = 255;
+        for(int i = 0; i < damage->height; ++i) {
+            for(int j = 0; j < damage->width; ++j) {
+                if( ++prevDist == 256 || cur[dataOff+j] != prev[dataOff+j] ) {
+                    if( i || j ) {
+                        //log_info("%d %d->(%d,%d)", bufp, prevDist, j, i);
+                        buf[bufp++] = (curPixel&0xffffff) | (prevDist-1) << 24;
+                    }
+                    curPixel = cur[dataOff + j];
+                    prevDist = 0;
+                }
+            }
+            dataOff += itemsPerLine;
+        }
+        buf[bufp++] = (curPixel&0xffffff) | prevDist << 24;
+        unsigned long long tmCur = curTimeMs();
+        static int nn = 0;
+        log_info("%3d %dx%d  %d -> %d, %d%%  %llu ms", ++nn, damage->width,
+                damage->height, damage->width * damage->height,
+                bufp, 100 * bufp / (damage->width * damage->height),
+                tmCur - tmBeg);
+        sock_writeU32(strm, bufp);
+        sock_write(strm, buf, bufp * sizeof(int));
+        free(buf);
+    }else{
+        sock_writeU32(strm, 0);
+        sock_writeRect(strm, conn->curImg->data + damage->y * bytesPerLine +
+                damage->x * bytespp, bytesPerLine, damage->width * bytespp,
+                damage->height);
+    }
+}
+
+static void sendLZ4(DisplayConnection *conn, SockStream *strm,
+        RectangleArea *damage)
+{
+    int bytespp = (conn->curImg->bits_per_pixel + 7) / 8;
+    int bytesPerLine = conn->curImg->bytes_per_line;
+
+    unsigned long long tmBeg = curTimeMs();
+    int dataOff = damage->y * bytesPerLine + damage->x * bytespp;
+    int lineBytes = damage->width * bytespp;
+    int imgBytes = lineBytes * damage->height;
+    char *bufsrc = malloc(imgBytes);
+    int srcOff = 0;
+
+    for(int i = 0; i < damage->height; ++i) {
+        memcpy(bufsrc + srcOff, conn->curImg->data + dataOff, lineBytes);
+        dataOff += bytesPerLine;
+        srcOff += lineBytes;
+    }
+    int destBytes = LZ4_compressBound(imgBytes);
+    char *bufdest = malloc(destBytes);
+    int comp = LZ4_compress_default(bufsrc, bufdest, imgBytes, destBytes);
+    unsigned long long tmCur = curTimeMs();
+    static int nn = 0;
+    log_info("%3d %dx%d  %d -> %d/%d, %d%%  %llu ms", ++nn, damage->width,
+            damage->height, imgBytes,
+            comp, destBytes, 100 * comp / imgBytes, tmCur - tmBeg);
+    sock_writeU32(strm, 0x514c4977);
+    sock_writeU32(strm, comp);
+    sock_write(strm, bufdest, comp);
+    free(bufsrc);
+    free(bufdest);
+}
+
+static void sendZStd(DisplayConnection *conn, SockStream *strm,
+        RectangleArea *damage)
+{
+    int bytespp = (conn->curImg->bits_per_pixel + 7) / 8;
+    int bytesPerLine = conn->curImg->bytes_per_line;
+
+    unsigned long long tmBeg = curTimeMs();
+    int dataOff = damage->y * bytesPerLine + damage->x * bytespp;
+    int lineBytes = damage->width * bytespp;
+    int imgBytes = lineBytes * damage->height;
+    char *bufsrc = malloc(imgBytes);
+    int srcOff = 0;
+
+    for(int i = 0; i < damage->height; ++i) {
+        memcpy(bufsrc + srcOff, conn->curImg->data + dataOff, lineBytes);
+        dataOff += bytesPerLine;
+        srcOff += lineBytes;
+    }
+    int destBytes = ZSTD_compressBound(imgBytes);
+    char *bufdest = malloc(destBytes);
+    int comp = ZSTD_compress(bufdest, destBytes, bufsrc, imgBytes, 3);
+    unsigned long long tmCur = curTimeMs();
+    static int nn = 0;
+    log_info("%3d %dx%d  %d -> %d/%d, %d%%  %llu ms", ++nn, damage->width,
+            damage->height, imgBytes,
+            comp, destBytes, 100 * comp / imgBytes, tmCur - tmBeg);
+    sock_writeU32(strm, comp);
+    sock_write(strm, bufdest, comp);
+    free(bufsrc);
+    free(bufdest);
+}
+
+void srvdisp_sendWILQ(DisplayConnection *conn, SockStream *strm,
+        RectangleArea *damage)
+{
+    int method = 2;
+
+    sock_writeU32(strm, 0x514c4957);
+    sock_writeU32(strm, method);
+    switch( method ) {
+    case 0:
+        sendDiff(conn, strm, damage);
+        break;
+    case 1:
+        sendLZ4(conn, strm, damage);
+        break;
+    case 2:
+        sendZStd(conn, strm, damage);
+        break;
+    }
 }
 
 const char *srvdisp_getPrevImage(const DisplayConnection *conn)

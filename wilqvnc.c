@@ -99,6 +99,9 @@ static void recvFramebufferUpdate(DisplayConnection *conn, SockStream *strm,
         case 5: // Hextile encoding
             decodeHextile(conn, strm, x, y, width, height, bytespp);
             break;
+        case 0x514c4957:
+            clidisp_decodeWILQ(conn, strm, x, y, width, height);
+            break;
         default:
             log_fatal("unsupported encoding %d", encType);
             break;
