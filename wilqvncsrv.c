@@ -29,14 +29,6 @@ static int isRectIntersectionEmpty(const RectangleArea *area1,
         area1->y + area1->height <= area2->y;
 }
 
-static void sendRect(DisplayConnection *conn, SockStream *strm,
-        RectangleArea *rect)
-{
-    //sock_writeU32(strm, 0);     // encoding type
-    //srvdisp_sendRectToSocket(conn, strm, rect);
-    srvdisp_sendWILQ(conn, strm, rect);
-}
-
 static int writeUpdate(DisplayConnection *conn, SockStream *strm,
         int isCursorChanged, RectangleArea *oldCursorArea)
 {
@@ -113,7 +105,6 @@ static int writeUpdate(DisplayConnection *conn, SockStream *strm,
             sock_writeU16(strm, oldCursorArea->y);
             sock_writeU16(strm, oldCursorArea->width);
             sock_writeU16(strm, oldCursorArea->height);
-            sock_writeU32(strm, 0);     // encoding type
             srvdisp_sendOldRectToSocket(conn, strm, oldCursorArea);
         }
 
@@ -128,7 +119,7 @@ static int writeUpdate(DisplayConnection *conn, SockStream *strm,
                     sock_writeU16(strm, motion.srcX);
                     sock_writeU16(strm, motion.srcY);
                 }else{
-                    sendRect(conn, strm, damageSplit + i);
+                    srvdisp_sendRectToSocket(conn, strm, damageSplit + i);
                 }
             }
         }
@@ -138,9 +129,7 @@ static int writeUpdate(DisplayConnection *conn, SockStream *strm,
             sock_writeU16(strm, oldCursorArea->y);
             sock_writeU16(strm, oldCursorArea->width);
             sock_writeU16(strm, oldCursorArea->height);
-            //sock_writeU32(strm, 0);     // encoding type
-            //srvdisp_sendRectToSocket(conn, strm, oldCursorArea);
-            sendRect(conn, strm, oldCursorArea);
+            srvdisp_sendRectToSocket(conn, strm, oldCursorArea);
         }
 
         if( putCursor ) {
@@ -148,7 +137,6 @@ static int writeUpdate(DisplayConnection *conn, SockStream *strm,
             sock_writeU16(strm, cursorArea.y);
             sock_writeU16(strm, cursorArea.width);
             sock_writeU16(strm, cursorArea.height);
-            sock_writeU32(strm, 0);     // encoding type
             srvdisp_sendCursorToSocket(conn, strm);
         }
         sock_flush(strm);

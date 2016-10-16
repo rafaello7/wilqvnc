@@ -299,129 +299,87 @@ void clidisp_putRectFromSocket(DisplayConnection *conn, SockStream *strm,
             bytesPerLine, width * bytespp, height);
 }
 
-static void decodeDiff(DisplayConnection *conn, SockStream *strm,
-        int x, int y, int width, int height)
-{
-    int bytesPerLine = conn->img->bytes_per_line;
-    int itemsPerLine = bytesPerLine / sizeof(int);
-    int count = sock_readU32(strm);
-
-    unsigned *buf = malloc(count * sizeof(int));
-    unsigned *img = (unsigned*)(conn->img->data + y * bytesPerLine
-            + x * sizeof(int));
-    sock_read(strm, buf, count * sizeof(int));
-    int col = 0, row = 0;
-    for(int i = 0; i < count; ++i) {
-        if( row >= height )
-            log_fatal("decodeDiff: bad data, %dx%d, row=%d, col=%d, "
-                    "i=%d count=%d", width, height, row, col, i, count);
-        unsigned b = buf[i];
-        img[col] = b & 0xffffff;
-        col += (b >> 24) + 1;
-        while( col >= width ) {
-            img += itemsPerLine;
-            ++row;
-            col -= width;
-        }
-        //log_info("%d %d->(%d, %d)", i, (b >> 24) + 1, col, row);
-    }
-    if( row != height || col != 0 )
-        log_fatal("decodeDiff: bad data, %dx%d, row=%d, col=%d, "
-                    "count=%d", width, height, row, col, count);
-    free(buf);
-}
-
-static void decodeLZ4(DisplayConnection *conn, SockStream *strm,
-        int x, int y, int width, int height)
-{
-    int bytesPerLine = conn->img->bytes_per_line;
-    int bytespp = (conn->img->bits_per_pixel + 7) / 8;
-    int size = sock_readU32(strm);
-
-    char *compressed = malloc(size);
-    sock_read(strm, compressed, size);
-    int areaSize = width * height * bytespp;
-    char *uncompressed = malloc(areaSize);
-    int res = LZ4_decompress_safe(compressed, uncompressed, size, areaSize);
-    if( res != areaSize )
-        log_fatal("LZ4_decompress_safe: areaSize=%d, res=%d", areaSize, res);
-    int srcOff = 0;
-    int srcLineBytes = width * bytespp;
-    int dataOff = y * bytesPerLine + x * bytespp;
-    for(int i = 0; i < height; ++i) {
-        memcpy(conn->img->data + dataOff, uncompressed + srcOff,  srcLineBytes);
-        dataOff += bytesPerLine;
-        srcOff += srcLineBytes;
-    }
-    free(compressed);
-    free(uncompressed);
-}
-
-static void decodeZStd(DisplayConnection *conn, SockStream *strm,
-        int x, int y, int width, int height)
-{
-    int bytesPerLine = conn->img->bytes_per_line;
-    int bytespp = (conn->img->bits_per_pixel + 7) / 8;
-    int size = sock_readU32(strm);
-
-    char *compressed = malloc(size);
-    sock_read(strm, compressed, size);
-    int areaSize = width * height * bytespp;
-    char *uncompressed = malloc(areaSize);
-    int res = ZSTD_decompress(uncompressed, areaSize, compressed, size);
-    if( res != areaSize ) {
-        if( ZSTD_isError(res) )
-            log_fatal("ZSTD_decompress: size=%d, areaSize=%d, res=%d, %s",
-                    size, areaSize, res, ZSTD_getErrorName(res));
-        log_fatal("ZSTD_decompress: areaSize=%d, res=%d", areaSize, res);
-    }
-    int srcOff = 0;
-    int srcLineBytes = width * bytespp;
-    int dataOff = y * bytesPerLine + x * bytespp;
-    for(int i = 0; i < height; ++i) {
-        memcpy(conn->img->data + dataOff, uncompressed + srcOff,  srcLineBytes);
-        dataOff += bytesPerLine;
-        srcOff += srcLineBytes;
-    }
-    free(compressed);
-    free(uncompressed);
-}
-
-static void decodeRaw(DisplayConnection *conn, SockStream *strm,
-        int x, int y, int width, int height)
-{
-    int bytesPerLine = conn->img->bytes_per_line;
-    int bytespp = (conn->img->bits_per_pixel + 7) / 8;
-    int size = sock_readU32(strm);
-
-    if( size != width * height * bytespp )
-        log_fatal("decodeRaw: size does not match, got %d, expected %d",
-                size, width * height * bytespp);
-    sock_readRect(strm, conn->img->data + y * bytesPerLine + x * bytespp,
-            bytesPerLine, width * bytespp, height);
-}
-
 void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
         int x, int y, int width, int height)
 {
-    int method = sock_readU32(strm);
+    int method, srclen, complen, res;
+    int bytesPerLine = conn->img->bytes_per_line;
+    int bytespp = (conn->img->bits_per_pixel + 7) / 8;
+    char *compressed, *uncompressed;
 
-    switch( method ) {
+    method = sock_readU32(strm);
+    if( method & 8 )
+        srclen = sock_readU32(strm);
+    else
+        srclen = width * height * bytespp; 
+    complen = sock_readU32(strm);
+    compressed = malloc(complen);
+    sock_read(strm, compressed, complen);
+    switch( method & 7 ) {
     case 0:
-        decodeDiff(conn, strm, x, y, width, height);
+        uncompressed = compressed;
+        if( complen != srclen )
+            log_fatal("decodeRaw: size does not match, got %d, expected %d",
+                    complen, srclen);
         break;
     case 1:
-        decodeLZ4(conn, strm, x, y, width, height);
+        uncompressed = malloc(srclen);
+        res = LZ4_decompress_safe(compressed, uncompressed, complen, srclen);
+        if( res != srclen )
+            log_fatal("LZ4_decompress_safe: srclen=%d, res=%d", srclen, res);
         break;
     case 2:
-        decodeZStd(conn, strm, x, y, width, height);
+        uncompressed = malloc(srclen);
+        res = ZSTD_decompress(uncompressed, srclen, compressed, complen);
+        if( res != srclen ) {
+            if( ZSTD_isError(res) )
+                log_fatal("ZSTD_decompress: complen=%d, srclen=%d, res=%d, %s",
+                        complen, srclen, res, ZSTD_getErrorName(res));
+            log_fatal("ZSTD_decompress: srclen=%d, res=%d", srclen, res);
+        }
         break;
     case 3:
-        decodeRaw(conn, strm, x, y, width, height);
         break;
     default:
         log_fatal("unsupported WILQ compression method %d", method);
     }
+    if( method & 8 ) {
+        int itemsPerLine = bytesPerLine / sizeof(int);
+        const unsigned *buf = (const unsigned*)uncompressed;
+        unsigned *img = (unsigned*)(conn->img->data + y * bytesPerLine
+                + x * sizeof(int));
+        int col = 0, row = 0, nitems = srclen / sizeof(int);
+        for(int i = 0; i < nitems; ++i) {
+            if( row >= height )
+                log_fatal("decodeDiff: bad data, %dx%d, row=%d, col=%d, "
+                        "i=%d nitems=%d", width, height, row, col, i, nitems);
+            unsigned b = buf[i];
+            img[col] = b & 0xffffff;
+            col += (b >> 24) + 1;
+            while( col >= width ) {
+                img += itemsPerLine;
+                ++row;
+                col -= width;
+            }
+            //log_info("%d %d->(%d, %d)", i, (b >> 24) + 1, col, row);
+        }
+        if( row != height || col != 0 )
+            log_fatal("decodeDiff: bad data, %dx%d, row=%d, col=%d, "
+                        "nitems=%d", width, height, row, col, nitems);
+    }else{
+        int srcOff = 0;
+        int srcLineBytes = width * bytespp;
+        int dataOff = y * bytesPerLine + x * bytespp;
+        for(int i = 0; i < height; ++i) {
+            memcpy(conn->img->data + dataOff, uncompressed + srcOff, 
+                    srcLineBytes);
+            dataOff += bytesPerLine;
+            srcOff += srcLineBytes;
+        }
+    }
+    free(compressed);
+    if( uncompressed != compressed )
+        free(uncompressed);
 }
 
 void clidisp_copyRect(DisplayConnection *conn, int srcX, int srcY,

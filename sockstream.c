@@ -112,6 +112,7 @@ void sock_read(SockStream *strm, void *buf, int toRead)
         toRead -= toCopy;
     }
     if( toRead > 0 ) {
+        int rdTot = 0;
         struct iovec iov[2];
         iov[1].iov_base = strm->readBuf;
         iov[1].iov_len = sizeof(strm->readBuf);
@@ -126,12 +127,14 @@ void sock_read(SockStream *strm, void *buf, int toRead)
                     log_fatal_errno("socket read");
             }
             toRead -= rd;
+            rdTot += rd;
             if( toRead <= 0 )
                 break;
             buf = (char*)buf + rd;
         }
         strm->readOff = 0;
         strm->readSize = -toRead;
+        log_debug("R  bytes read: %d", rdTot);
     }
 }
 
@@ -177,6 +180,7 @@ void sock_readRect(SockStream *strm, char *buf, int bytesPerLine,
     }
     int off = strm->readSize - strm->readOff;
     memcpy(buf, strm->readBuf + strm->readOff, off);
+    int rdTot = 0;
     while( height >= IOV_SIZE ) {
         for(lineNo = 1; lineNo < IOV_SIZE; ++lineNo) {
             iov[lineNo].iov_base = buf + lineNo * bytesPerLine;
@@ -194,11 +198,12 @@ void sock_readRect(SockStream *strm, char *buf, int bytesPerLine,
                     log_fatal_errno("socket read");
             }
             off += rd;
+            rdTot += rd;
         }
         height -= IOV_SIZE;
         if( height == 0 ) {
             strm->readOff = strm->readSize = 0;
-            return;
+            goto stats;
         }
         buf = (char*)buf + IOV_SIZE * bytesPerLine;
         off = 0;
@@ -222,9 +227,12 @@ void sock_readRect(SockStream *strm, char *buf, int bytesPerLine,
                 log_fatal_errno("socket read");
         }
         off += rd;
+        rdTot += rd;
     }
     strm->readSize = off - height * width;
     strm->readOff = 0;
+stats:
+    log_debug("RR bytes read: %d", rdTot);
 }
 
 void sock_discard(SockStream *strm, unsigned bytes)
@@ -253,10 +261,12 @@ void sock_write(SockStream *strm, const void *buf, int count)
         iov[iovEnd].iov_base = (void*)buf;
         iov[iovEnd].iov_len = count;
         ++iovEnd;
+        int wrTot = 0;
         while( 1 ) {
             int wr = writev(strm->sockFd, iov + iovBeg, iovEnd - iovBeg);
             if( wr < 0 )
                 log_fatal_errno("writev beg=%d, end=%d", iovBeg, iovEnd);
+            wrTot += wr;
             while( iovBeg < iovEnd && iov[iovBeg].iov_len <= wr ) {
                 wr -= iov[iovBeg].iov_len;
                 ++iovBeg;
@@ -267,6 +277,7 @@ void sock_write(SockStream *strm, const void *buf, int count)
             iov[iovBeg].iov_len -= wr;
         }
         strm->writeOff = 0;
+        log_debug("W  bytes written: %d", wrTot);
     }else{
         memcpy(strm->writeBuf + strm->writeOff, buf, count);
         strm->writeOff += count;
@@ -311,6 +322,7 @@ void sock_writeRect(SockStream *strm, const char *buf, int bytesPerLine,
         }
         return;
     }
+    int wrTot = 0;
     while( height > 0 ) {
         int iovBeg = 0, iovEnd = 0;
         if( strm->writeOff > 0 ) {
@@ -339,6 +351,7 @@ void sock_writeRect(SockStream *strm, const char *buf, int bytesPerLine,
                 }
                 abort();
             }
+            wrTot += wr;
             while( iovBeg < iovEnd && iov[iovBeg].iov_len <= wr ) {
                 wr -= iov[iovBeg].iov_len;
                 ++iovBeg;
@@ -349,6 +362,7 @@ void sock_writeRect(SockStream *strm, const char *buf, int bytesPerLine,
             iov[iovBeg].iov_len -= wr;
         }
     }
+    log_debug("WR bytes written: %d", wrTot);
 }
 
 void sock_flush(SockStream *strm)
@@ -361,6 +375,8 @@ void sock_flush(SockStream *strm)
             log_fatal_errno("socket write");
         off += wr;
     }
+    if( strm->writeOff > 0 )
+        log_debug("F  bytes written: %d", strm->writeOff);
     strm->writeOff = 0;
 }
 

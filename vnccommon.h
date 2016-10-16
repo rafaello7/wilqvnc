@@ -32,4 +32,9 @@ typedef struct {
     int x, y;
 } VncPointerEvent;
 
+typedef struct {
+    int x, y, width, height;
+} RectangleArea;
+
+
 #endif /* VNCCOMMON_H */

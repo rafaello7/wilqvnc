@@ -18,4 +18,12 @@ void srvconn_recvPointerEvent(SockStream*, VncPointerEvent*);
 void srvconn_recvCutText(SockStream*);
 
 
+/* Sends rectangle area of image to socket using encoding method according
+ * to command line settings.
+ */
+void srvconn_sendRectEncoded(SockStream*, const char *prevImg,
+        const char *curImg, int bytesPerPixel, int bytesPerLine,
+        const RectangleArea*);
+
+
 #endif /* SRVCONN_H */

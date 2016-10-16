@@ -13,10 +13,6 @@ typedef enum {
 } VncEventType;
 
 typedef struct {
-    int x, y, width, height;
-} RectangleArea;
-
-typedef struct {
     VncEventType evType;
 } DisplayEvent;
 

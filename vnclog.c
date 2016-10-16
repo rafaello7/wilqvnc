@@ -5,6 +5,8 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/time.h>
+#include <time.h>
 
 
 static int gLogLevel = 0;
@@ -17,6 +19,13 @@ void log_setLevel(int level)
 static void dolog(int level, const char *fmt, va_list args, int errNum)
 {
     if( level <= gLogLevel ) {
+        if( gLogLevel >= 2 ) {
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            struct tm *tmp = localtime(&tv.tv_sec);
+            printf("%02d:%02d:%02d.%03ld ", tmp->tm_hour, tmp->tm_min,
+                    tmp->tm_sec, tv.tv_usec / 1000);
+        }
         if( level < 0 )
             printf("error: ");
         else if( level == 0 )

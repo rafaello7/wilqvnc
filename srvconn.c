@@ -4,6 +4,10 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <rpc/des_crypt.h>
+#include <sys/time.h>
+#include <lz4.h>
+#include <zstd.h>
+#include "srvcmdline.h"
 #include "vnclog.h"
 
 
@@ -172,5 +176,115 @@ void srvconn_recvCutText(SockStream *strm)
     sock_discard(strm, 3);     // padding
     unsigned len = sock_readU32(strm);
     sock_discard(strm, len);
+}
+
+static unsigned long long curTimeMs(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
+}
+
+void srvconn_sendRectEncoded(SockStream *strm, const char *prevImg,
+        const char *curImg, int bytesPerPixel, int bytesPerLine,
+        const RectangleArea *rect)
+{
+    const CmdLineParams *params = cmdline_getParams();
+    int useDiff;
+
+    useDiff = params->useDiff && prevImg != NULL &&
+        bytesPerPixel == sizeof(int) && bytesPerLine % sizeof(int) == 0;
+    if( useDiff || params->compr != COMPR_NONE ) {
+        int rectlen, srclen, destlen, complen, method;
+        char *bufsrc, *bufdest;
+        const char *compressed;
+        unsigned long long tmBeg = curTimeMs();
+
+        rectlen = rect->width * rect->height * bytesPerPixel;
+        bufsrc = malloc(rectlen);
+        if( useDiff ) {
+            const unsigned *prev = (const unsigned*)prevImg;
+            const unsigned *cur = (const unsigned*)curImg;
+            int itemsPerLine = bytesPerLine / sizeof(int);
+            int dataOff = rect->y * itemsPerLine + rect->x;
+            unsigned *buf = (unsigned*)bufsrc;
+            srclen = 0;
+
+            unsigned curPixel;
+            unsigned prevDist = 255;
+            for(int i = 0; i < rect->height; ++i) {
+                for(int j = 0; j < rect->width; ++j) {
+                    if( ++prevDist == 256 || cur[dataOff+j] != prev[dataOff+j])
+                    {
+                        if( i || j ) {
+                            buf[srclen++] =
+                                (curPixel&0xffffff) | (prevDist-1) << 24;
+                        }
+                        curPixel = cur[dataOff + j];
+                        prevDist = 0;
+                    }
+                }
+                dataOff += itemsPerLine;
+            }
+            buf[srclen++] = (curPixel&0xffffff) | prevDist << 24;
+            srclen *= sizeof(int);
+        }else{
+            int dataOff = rect->y * bytesPerLine + rect->x * bytesPerPixel;
+            int linelen = rect->width * bytesPerPixel;
+            srclen = rectlen;
+            int srcOff = 0;
+
+            for(int i = 0; i < rect->height; ++i) {
+                memcpy(bufsrc + srcOff, curImg + dataOff, linelen);
+                dataOff += bytesPerLine;
+                srcOff += linelen;
+            }
+        }
+
+        switch( params->compr ) {
+        case COMPR_LZ4:
+            destlen = LZ4_compressBound(srclen);
+            compressed = bufdest = malloc(destlen);
+            complen = LZ4_compress_fast(bufsrc, bufdest, srclen, destlen,
+                    params->lz4Level);
+            method = 1;
+            break;
+        case COMPR_ZSTD:
+            destlen = ZSTD_compressBound(srclen);
+            compressed = bufdest = malloc(destlen);
+            complen = ZSTD_compress(bufdest, destlen, bufsrc, srclen, 
+                    params->zstdLevel);
+            method = 2;
+            break;
+        default:
+            bufdest = NULL;
+            complen = srclen;
+            break;
+        }
+        if( complen >= srclen ) {
+            compressed = bufsrc;
+            complen = srclen;
+            method = 0;
+        }
+        unsigned long long tmCur = curTimeMs();
+        log_info("%d -> %d, %d%%  %llu ms", rectlen, complen,
+                100 * complen / rectlen, tmCur - tmBeg);
+        sock_writeU32(strm, 0x514c4957);
+        if( useDiff ) {
+            sock_writeU32(strm, method | 8);
+            sock_writeU32(strm, srclen);
+        }else{
+            sock_writeU32(strm, method);
+        }
+        sock_writeU32(strm, complen);
+        sock_write(strm, compressed, complen);
+        free(bufdest);
+        free(bufsrc);
+    }else{
+        sock_writeU32(strm, 0);
+        sock_writeRect(strm, curImg + rect->y * bytesPerLine +
+                rect->x * bytesPerPixel, bytesPerLine,
+                rect->width * bytesPerPixel, rect->height);
+    }
 }
 
