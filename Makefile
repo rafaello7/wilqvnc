@@ -1,5 +1,5 @@
 CLI_OBJS = clicmdline.o vnclog.o sockstream.o clivncconn.o clidisplay.o wilqvnc.o
-SRV_OBJS = vnclog.o sockstream.o srvvncconn.o srvdisplay.o wilqvncsrv.o
+SRV_OBJS = srvcmdline.o vnclog.o sockstream.o srvvncconn.o srvdisplay.o wilqvncsrv.o
 
 all:: wilqvncsrv wilqvnc
 

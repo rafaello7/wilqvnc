@@ -60,10 +60,10 @@ SockStream *sock_connectVNCHost(const char *hostVNC)
     return strm;
 }
 
-SockStream *sock_accept(void)
+SockStream *sock_accept(int vncDisplay)
 {
     int listenFd, sockFd, isOn = 1;
-    unsigned port = 5900;
+    unsigned port = 5900 + vncDisplay;
 
     if( (listenFd = socket(AF_INET, SOCK_STREAM, 0)) < 0 )
         log_fatal_errno("socket");

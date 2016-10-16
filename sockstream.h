@@ -5,7 +5,7 @@ typedef struct SockStream SockStream;
 
 SockStream *sock_connectVNCHost(const char *hostVNC);
 
-SockStream *sock_accept(void);
+SockStream *sock_accept(int vncDisplay);
 
 
 void sock_read(SockStream*, void *buf, int toRead);

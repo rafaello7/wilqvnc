@@ -2,6 +2,7 @@
 #include "vnclog.h"
 #include "srvvncconn.h"
 #include "srvdisplay.h"
+#include "srvcmdline.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -156,8 +157,11 @@ int main(int argc, char *argv[])
     RectangleArea cursorRegion;
     VncPointerEvent pointerEvHist[MHIST_SIZE];
 
-    log_setLevel(2);
-    strm = sock_accept();
+    const char *err = cmdline_parse(argc, argv);
+    if( err != NULL )
+        log_fatal("%s", err);
+    log_setLevel(cmdline_getParams()->logLevel);
+    strm = sock_accept(cmdline_getParams()->vncDisplayNumber);
     DisplayConnection *conn = srvdisp_open();
     VncVersion vncVer = srvconn_exchangeVersion(strm);
     srvconn_exchangeAuth(strm, vncVer, NULL);

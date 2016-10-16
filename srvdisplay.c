@@ -14,6 +14,7 @@
 #include <zstd.h>
 #include "srvdisplay.h"
 #include "vnclog.h"
+#include "srvcmdline.h"
 
 #include <sys/time.h>
  
@@ -664,7 +665,8 @@ static void sendLZ4(DisplayConnection *conn, SockStream *strm,
     }
     int destBytes = LZ4_compressBound(imgBytes);
     char *bufdest = malloc(destBytes);
-    int comp = LZ4_compress_fast(bufsrc, bufdest, imgBytes, destBytes, 11);
+    int comp = LZ4_compress_fast(bufsrc, bufdest, imgBytes, destBytes,
+            cmdline_getParams()->lz4Level);
     unsigned long long tmCur = curTimeMs();
     static int nn = 0;
     log_info("%3d %dx%d  %d -> %d/%d, %d%%  %llu ms", ++nn, damage->width,
@@ -696,7 +698,8 @@ static void sendZStd(DisplayConnection *conn, SockStream *strm,
     }
     int destBytes = ZSTD_compressBound(imgBytes);
     char *bufdest = malloc(destBytes);
-    int comp = ZSTD_compress(bufdest, destBytes, bufsrc, imgBytes, 3);
+    int comp = ZSTD_compress(bufdest, destBytes, bufsrc, imgBytes, 
+            cmdline_getParams()->zstdLevel);
     unsigned long long tmCur = curTimeMs();
     static int nn = 0;
     log_info("%3d %dx%d  %d -> %d/%d, %d%%  %llu ms", ++nn, damage->width,
@@ -745,7 +748,23 @@ void srvdisp_sendWILQ(DisplayConnection *conn, SockStream *strm,
         RectangleArea *damage)
 {
     int method = 2;
+    const CmdLineParams *params = cmdline_getParams();
 
+    if( params->useDiff )
+        method = 0;
+    else{
+        switch( params->compr ) {
+        case COMPR_ZSTD:
+            method = 2;
+            break;
+        case COMPR_LZ4:
+            method = 1;
+            break;
+        default:
+            method = 3;
+            break;
+        }
+    }
     sock_writeU32(strm, 0x514c4957);
     sock_writeU32(strm, method);
     switch( method ) {
