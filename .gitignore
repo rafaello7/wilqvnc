@@ -1,5 +1,6 @@
 *.o
 wilqvnc
 wilqvncsrv
+wilqvncctl
 tags
 wilqvnc.tar.gz

@@ -27,5 +27,10 @@ const char *cmdline_parse(int argc, char *argv[]);
 
 const CmdLineParams *cmdline_getParams(void);
 
+void cmdline_initCtl(void);
+int cmdline_getCtlFd(void);
+void cmdline_recvCtlMsg(void);
+
+void cmdline_sendCtlMsg(int argc, char *argv[]);
 
 #endif /* SRVCMDLINE_H */

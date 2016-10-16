@@ -1,14 +1,21 @@
-CLI_OBJS = clicmdline.o vnclog.o sockstream.o clivncconn.o clidisplay.o wilqvnc.o
-SRV_OBJS = srvcmdline.o vnclog.o sockstream.o srvvncconn.o srvdisplay.o wilqvncsrv.o
+CLI_OBJS = clicmdline.o vnclog.o sockstream.o clivncconn.o clidisplay.o \
+		   wilqvnc.o
+SRV_OBJS = srvcmdline.o vnclog.o sockstream.o srvvncconn.o srvdisplay.o \
+		   wilqvncsrv.o
+CTL_OBJS = vnclog.o srvcmdline.o wilqvncctl.o
 
-all:: wilqvncsrv wilqvnc
+
+all:: wilqvncsrv wilqvnc wilqvncctl
 
 wilqvnc: $(CLI_OBJS)
 	gcc $(CLI_OBJS) -o wilqvnc -lX11 -lXext -llz4 -lzstd
 
 wilqvncsrv: $(SRV_OBJS)
-	gcc $(SRV_OBJS) -o wilqvncsrv -lX11 -lXdamage -lXext -lXtst -lXfixes -llz4 -lzstd
+	gcc $(SRV_OBJS) -o wilqvncsrv -lX11 -lXdamage -lXext -lXtst -lXfixes \
+		-llz4 -lzstd
 
+wilqvncctl: $(CTL_OBJS)
+	gcc $(CTL_OBJS) -o wilqvncctl
 
 .c.o:
 	gcc -g -c -Wall $<

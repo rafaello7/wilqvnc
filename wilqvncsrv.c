@@ -158,8 +158,10 @@ int main(int argc, char *argv[])
     VncPointerEvent pointerEvHist[MHIST_SIZE];
 
     const char *err = cmdline_parse(argc, argv);
-    if( err != NULL )
-        log_fatal("%s", err);
+    if( err != NULL ) {
+        printf("\n%s", err);
+        return 0;
+    }
     log_setLevel(cmdline_getParams()->logLevel);
     strm = sock_accept(cmdline_getParams()->vncDisplayNumber);
     DisplayConnection *conn = srvdisp_open();

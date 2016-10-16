@@ -103,6 +103,7 @@ DisplayConnection *srvdisp_open(void)
     conn->curDamage.width = width;
     conn->curDamage.height = height;
     conn->cursorImg = XFixesGetCursorImage(d);
+    cmdline_initCtl();
     return conn;
 }
 
@@ -252,10 +253,17 @@ int srvdisp_nextEvent(DisplayConnection *conn, SockStream *strm,
     while( displayEvent->evType == VET_NONE && !isEvFd ) {
         int dispFd = XConnectionNumber(conn->d);
         int sockFd = sock_fd(strm);
+        int ctlFd = cmdline_getCtlFd();
         FD_SET(dispFd, &conn->fds);
         FD_SET(sockFd, &conn->fds);
-        int selCnt = select((dispFd > sockFd ? dispFd : sockFd)+1,
-                &conn->fds, NULL, NULL, wait ? NULL : &tmout);
+        FD_SET(ctlFd, &conn->fds);
+        int maxFd = dispFd;
+        if( sockFd > maxFd )
+            maxFd = sockFd;
+        if( ctlFd > maxFd )
+            maxFd = ctlFd;
+        int selCnt = select(maxFd+1, &conn->fds, NULL, NULL,
+                wait ? NULL : &tmout);
         if( selCnt < 0 )
             log_fatal_errno("select");
         if( selCnt == 0 )
@@ -267,6 +275,10 @@ int srvdisp_nextEvent(DisplayConnection *conn, SockStream *strm,
         if( FD_ISSET(sockFd, &conn->fds) ) {
             FD_CLR(sockFd, &conn->fds);
             isEvFd = True;
+        }
+        if( FD_ISSET(ctlFd, &conn->fds) ) {
+            FD_CLR(ctlFd, &conn->fds);
+            cmdline_recvCtlMsg();
         }
     }
     return isEvFd;
