@@ -18,6 +18,7 @@ typedef struct {
     int discoverVerticalMovement;
     int useDiff;
     int vncDisplayNumber;
+    int runOnce;
 } CmdLineParams;
 
 

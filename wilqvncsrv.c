@@ -156,14 +156,16 @@ int main(int argc, char *argv[])
     PixelFormat pixelFormat;
     RectangleArea cursorRegion;
     VncPointerEvent pointerEvHist[MHIST_SIZE];
+    const CmdLineParams *params;
 
     const char *err = cmdline_parse(argc, argv);
     if( err != NULL ) {
-        printf("\n%s", err);
+        printf("\n%s\n", err);
         return 0;
     }
-    log_setLevel(cmdline_getParams()->logLevel);
-    strm = sock_accept(cmdline_getParams()->vncDisplayNumber);
+    params = cmdline_getParams();
+    log_setLevel(params->logLevel);
+    strm = sock_accept(params->vncDisplayNumber, params->runOnce);
     DisplayConnection *conn = srvdisp_open();
     VncVersion vncVer = srvconn_exchangeVersion(strm);
     srvconn_exchangeAuth(strm, vncVer, NULL);

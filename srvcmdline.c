@@ -36,7 +36,8 @@ static const char *usage(const char *progname, char *buf, int buflen)
         "  -h |-help                   - print this help\n"
         "  -[no]mm                     - CopyRect discovery by mouse move\n"
         "  -[no]vm                     - CopyRect vertical move discovery\n"
-        "  -[no]diff                   - pixel-by-pixel difference\n",
+        "  -[no]diff                   - pixel-by-pixel difference\n"
+        "  -once                       - run once (no fork)\n",
         progname);
     return buf;
 }
@@ -93,6 +94,8 @@ const char *cmdline_parse(int argc, char *argv[])
             gParams.useDiff = 1;
         else if( !strcmp(argv[i], "-nodiff") )
             gParams.useDiff = 0;
+        else if( !strcmp(argv[i], "-once") )
+            gParams.runOnce = 1;
         else if( argv[i][0] == '-' ) {
             snprintf(resultBuf, sizeof(resultBuf),
                     "unrecognized option -- %s", argv[i]);

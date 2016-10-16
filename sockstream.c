@@ -60,7 +60,7 @@ SockStream *sock_connectVNCHost(const char *hostVNC)
     return strm;
 }
 
-SockStream *sock_accept(int vncDisplay)
+SockStream *sock_accept(int vncDisplay, int runOnce)
 {
     int listenFd, sockFd, isOn = 1;
     unsigned port = 5900 + vncDisplay;
@@ -79,7 +79,7 @@ SockStream *sock_accept(int vncDisplay)
     if( listen(listenFd, 5) < 0 )
         log_fatal_errno("listen");
     while( (sockFd = accept(listenFd, NULL, 0)) >= 0 ) {
-        switch( 0 /*fork()*/ ) {
+        switch( runOnce ? 0 : fork() ) {
         case -1:
             log_fatal_errno("fork");
         case 0:
