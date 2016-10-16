@@ -1,6 +1,6 @@
-CLI_OBJS = clicmdline.o vnclog.o sockstream.o clivncconn.o clidisplay.o \
+CLI_OBJS = clicmdline.o vnclog.o sockstream.o cliconn.o clidisplay.o \
 		   wilqvnc.o
-SRV_OBJS = srvcmdline.o vnclog.o sockstream.o srvvncconn.o srvdisplay.o \
+SRV_OBJS = srvcmdline.o vnclog.o sockstream.o srvconn.o srvdisplay.o \
 		   wilqvncsrv.o
 CTL_OBJS = vnclog.o srvcmdline.o wilqvncctl.o
 
@@ -23,7 +23,7 @@ wilqvncctl: $(CTL_OBJS)
 $(SRV_OBJS) $(CLI_OBJS): vnccommon.h
 
 clean:
-	rm -f $(SRV_OBJS) $(CLI_OBJS) wilqvnc wilqvncsrv
+	rm -f $(SRV_OBJS) $(CLI_OBJS) $(CTL_OBJS) wilqvnc wilqvncsrv wilqvncctl
 
 tar:
 	cd .. && tar cf wilqvnc/wilqvnc.tar.gz  wilqvnc/*.[ch] wilqvnc/Makefile

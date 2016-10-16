@@ -593,16 +593,20 @@ int srvdisp_discoverMotion(DisplayConnection *conn, RectangleMotion *motion)
     if( damage->width >= 32 && damage->height >= 32 && bytespp == sizeof(int)
             && bytesPerLine % sizeof(int) == 0)
     {
-        static int nn = 0;
-        log_info("%3d %dx%d", ++nn, damage->width, damage->height);
+        //static int nn = 0;
+        //log_info("%3d %dx%d", ++nn, damage->width, damage->height);
         const unsigned *prev = (const unsigned*)conn->prevImg;
         const unsigned *cur = (const unsigned*)conn->curImg->data;
-        if( discoverMotionByMouseMove(conn->ptrEvHist, damage, prev, cur,
-                bytesPerLine / sizeof(int), motion) )
-            return True;
-        if( discoverVerticalMotion(damage, prev, cur,
-                    bytesPerLine / sizeof(int)) )
-            return True;
+        if( cmdline_getParams()->discoverMouseMovement ) {
+            if( discoverMotionByMouseMove(conn->ptrEvHist, damage, prev, cur,
+                    bytesPerLine / sizeof(int), motion) )
+                return True;
+        }
+        if( cmdline_getParams()->discoverVerticalMovement ) {
+            if( discoverVerticalMotion(damage, prev, cur,
+                        bytesPerLine / sizeof(int)) )
+                return True;
+        }
     }
     return False;
 }
@@ -642,7 +646,7 @@ static void sendDiff(DisplayConnection *conn, SockStream *strm,
         buf[bufp++] = (curPixel&0xffffff) | prevDist << 24;
         unsigned long long tmCur = curTimeMs();
         static int nn = 0;
-        log_info("%3d %dx%d  %d -> %d, %d%%  %llu ms", ++nn, damage->width,
+        log_info("dif %3d %dx%d  %d -> %d, %d%%  %llu ms", ++nn, damage->width,
                 damage->height, damage->width * damage->height,
                 bufp, 100 * bufp / (damage->width * damage->height),
                 tmCur - tmBeg);
@@ -681,7 +685,7 @@ static void sendLZ4(DisplayConnection *conn, SockStream *strm,
             cmdline_getParams()->lz4Level);
     unsigned long long tmCur = curTimeMs();
     static int nn = 0;
-    log_info("%3d %dx%d  %d -> %d/%d, %d%%  %llu ms", ++nn, damage->width,
+    log_info("lz4 %3d %dx%d  %d -> %d/%d, %d%%  %llu ms", ++nn, damage->width,
             damage->height, imgBytes,
             comp, destBytes, 100 * comp / imgBytes, tmCur - tmBeg);
     sock_writeU32(strm, comp);
@@ -714,7 +718,7 @@ static void sendZStd(DisplayConnection *conn, SockStream *strm,
             cmdline_getParams()->zstdLevel);
     unsigned long long tmCur = curTimeMs();
     static int nn = 0;
-    log_info("%3d %dx%d  %d -> %d/%d, %d%%  %llu ms", ++nn, damage->width,
+    log_info("zstd %3d %dx%d  %d -> %d/%d, %d%%  %llu ms", ++nn, damage->width,
             damage->height, imgBytes,
             comp, destBytes, 100 * comp / imgBytes, tmCur - tmBeg);
     sock_writeU32(strm, comp);
@@ -747,7 +751,7 @@ static void sendRaw(DisplayConnection *conn, SockStream *strm,
     int comp = imgBytes;
     unsigned long long tmCur = curTimeMs();
     static int nn = 0;
-    log_info("%3d %dx%d  %d -> %d/%d, %d%%  %llu ms", ++nn, damage->width,
+    log_info("raw %3d %dx%d  %d -> %d/%d, %d%%  %llu ms", ++nn, damage->width,
             damage->height, imgBytes,
             comp, destBytes, 100 * comp / imgBytes, tmCur - tmBeg);
     sock_writeU32(strm, comp);
@@ -826,6 +830,17 @@ void srvdisp_getCursorRegion(DisplayConnection *conn,
         cursorRegion->width = conn->curImg->width - cursorRegion->x;
     if( cursorRegion->width <= 0 || cursorRegion->height <= 0 )
         cursorRegion->width = cursorRegion->height = 0;
+}
+
+void srvdisp_sendOldRectToSocket(DisplayConnection *conn, SockStream *strm,
+        const RectangleArea *damage)
+{
+    int bytesPerLine = conn->curImg->bytes_per_line;
+    int bytespp = (conn->curImg->bits_per_pixel + 7) / 8;
+
+    sock_writeRect(strm, conn->prevImg + damage->y * bytesPerLine +
+            damage->x * bytespp, bytesPerLine, damage->width * bytespp,
+            damage->height);
 }
 
 void srvdisp_sendRectToSocket(DisplayConnection *conn, SockStream *strm,

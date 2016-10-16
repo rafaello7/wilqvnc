@@ -1,5 +1,5 @@
-#ifndef VNCCONN_H
-#define VNCCONN_H
+#ifndef SRVCONN_H
+#define SRVCONN_H
 
 #include "vnccommon.h"
 #include "sockstream.h"
@@ -18,4 +18,4 @@ void srvconn_recvPointerEvent(SockStream*, VncPointerEvent*);
 void srvconn_recvCutText(SockStream*);
 
 
-#endif /* VNCCONN_H */
+#endif /* SRVCONN_H */

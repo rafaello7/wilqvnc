@@ -1,6 +1,6 @@
 #include "sockstream.h"
 #include "vnclog.h"
-#include "srvvncconn.h"
+#include "srvconn.h"
 #include "srvdisplay.h"
 #include "srvcmdline.h"
 #include <stdio.h>
@@ -59,7 +59,7 @@ static int writeUpdate(DisplayConnection *conn, SockStream *strm,
         ( !putCursor || ! isRectCoveredBy(oldCursorArea, &cursorArea) );
     if( putDamage ) {
         splitCnt = 1;
-        if( (sendCopyRect = 0 /*srvdisp_discoverMotion(conn, &motion)*/) != 0 )
+        if( (sendCopyRect = srvdisp_discoverMotion(conn, &motion)) != 0 )
         {
             damageSplit[0] = motion.rect;
             // above motion
@@ -96,6 +96,7 @@ static int writeUpdate(DisplayConnection *conn, SockStream *strm,
                 damageSplit[splitCnt].height = motion.rect.height;
                 ++splitCnt;
             }
+            putOldCursor = putCursor = 1;
         }else{
             damageSplit[0] = damage;
         }
@@ -105,7 +106,16 @@ static int writeUpdate(DisplayConnection *conn, SockStream *strm,
         sock_writeU8(strm, 0);      // message type
         sock_writeU8(strm, 0);      // padding
         // number of rectangles
-        sock_writeU16(strm, splitCnt + putOldCursor + putCursor);
+        sock_writeU16(strm, splitCnt + 2 * putOldCursor + putCursor);
+
+        if( putOldCursor ) {
+            sock_writeU16(strm, oldCursorArea->x);
+            sock_writeU16(strm, oldCursorArea->y);
+            sock_writeU16(strm, oldCursorArea->width);
+            sock_writeU16(strm, oldCursorArea->height);
+            sock_writeU32(strm, 0);     // encoding type
+            srvdisp_sendOldRectToSocket(conn, strm, oldCursorArea);
+        }
 
         if( putDamage ) {
             for(int i = 0; i < splitCnt; ++i) {
@@ -128,8 +138,9 @@ static int writeUpdate(DisplayConnection *conn, SockStream *strm,
             sock_writeU16(strm, oldCursorArea->y);
             sock_writeU16(strm, oldCursorArea->width);
             sock_writeU16(strm, oldCursorArea->height);
-            sock_writeU32(strm, 0);     // encoding type
-            srvdisp_sendRectToSocket(conn, strm, oldCursorArea);
+            //sock_writeU32(strm, 0);     // encoding type
+            //srvdisp_sendRectToSocket(conn, strm, oldCursorArea);
+            sendRect(conn, strm, oldCursorArea);
         }
 
         if( putCursor ) {

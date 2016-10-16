@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <sys/time.h>
 #include "clidisplay.h"
-#include "clivncconn.h"
+#include "cliconn.h"
 #include "vnclog.h"
 #include "clicmdline.h"
 

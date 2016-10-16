@@ -1,5 +1,5 @@
-#ifndef CLIVNCCONN_H
-#define CLIVNCCONN_H
+#ifndef CLICONN_H
+#define CLICONN_H
 
 #include "vnccommon.h"
 #include "sockstream.h"
@@ -16,4 +16,4 @@ void cliconn_sendKeyEvent(SockStream*, const VncKeyEvent*);
 void cliconn_sendPointerEvent(SockStream*, const VncPointerEvent*);
 
 
-#endif /* CLIVNCCONN_H */
+#endif /* CLICONN_H */

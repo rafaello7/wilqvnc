@@ -72,6 +72,8 @@ int srvdisp_discoverMotion(DisplayConnection *conn, RectangleMotion*);
 const char *srvdisp_getPrevImage(const DisplayConnection*);
 const char *srvdisp_getCurImage(const DisplayConnection*);
 
+void srvdisp_sendOldRectToSocket(DisplayConnection*, SockStream*,
+        const RectangleArea*);
 void srvdisp_sendRectToSocket(DisplayConnection*, SockStream*,
         const RectangleArea*);
 void srvdisp_sendWILQ(DisplayConnection*, SockStream*, RectangleArea *damage);

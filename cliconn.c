@@ -1,4 +1,4 @@
-#include "clivncconn.h"
+#include "cliconn.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

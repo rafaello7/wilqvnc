@@ -201,6 +201,7 @@ void cmdline_recvCtlMsg(void)
     if( sendto(gCtlFd, err, strlen(err), 0,
             (struct sockaddr*)&sun, addrlen) < 0 )
         log_error_errno("control socket send fail");
+    log_setLevel(gParams.logLevel);
 }
 
 void cmdline_sendCtlMsg(int argc, char *argv[])
