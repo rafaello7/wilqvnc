@@ -1,9 +1,11 @@
 #include <stdio.h>
 #include <sys/time.h>
+#include <stdlib.h>
 #include "clidisplay.h"
 #include "cliconn.h"
 #include "vnclog.h"
 #include "clicmdline.h"
+#include <zlib.h>
 
 
 static void decodeRRE(DisplayConnection *conn, SockStream *strm,
@@ -63,6 +65,46 @@ static void decodeHextile(DisplayConnection *conn, SockStream *strm,
     }
 }
 
+static void decodeZRLE(DisplayConnection *conn, SockStream *strm,
+        int x, int y, int width, int height, int bytespp)
+{
+    // TODO: associate with SockStream
+    static z_stream zstrm;
+    static int isInitialized = 0;
+    unsigned char *bufcompr, *bufdest;
+    int comprlen, resInfl, outlen;
+
+    comprlen = sock_readU32(strm);
+    bufcompr = malloc(comprlen);
+
+    sock_read(strm, bufcompr, comprlen);
+    zstrm.next_in = (Bytef*)bufcompr;
+    zstrm.avail_in = comprlen;
+    if( ! isInitialized ) {
+        zstrm.zalloc = NULL;
+        zstrm.zfree = NULL;
+        zstrm.opaque = NULL;
+        int initRes = inflateInit(&zstrm);
+        if( initRes != Z_OK )
+            log_fatal("inflateInit error=%d", initRes);
+        isInitialized = 1;
+    }
+    // assume that encoding produces less output than "raw" one
+    outlen = width * height * bytespp;
+    bufdest = malloc(outlen);
+    zstrm.next_out = (Bytef*)bufdest;
+    zstrm.avail_out = outlen;
+    resInfl = inflate(&zstrm, Z_SYNC_FLUSH);
+    if( resInfl != Z_OK )
+        log_fatal("inflate returned %d", resInfl);
+    if( zstrm.avail_in != 0 )
+        log_fatal("non-zero inflate avail_in: %d", zstrm.avail_in);
+    outlen -= zstrm.avail_out;
+    clidisp_decodeTRLE(conn, bufdest, outlen, x, y, width, height, 64);
+    free(bufcompr);
+    free(bufdest);
+}
+
 static unsigned long long curTimeMs(void)
 {
     struct timeval tv;
@@ -98,6 +140,9 @@ static void recvFramebufferUpdate(DisplayConnection *conn, SockStream *strm,
             break;
         case 5: // Hextile encoding
             decodeHextile(conn, strm, x, y, width, height, bytespp);
+            break;
+        case 16:
+            decodeZRLE(conn, strm, x, y, width, height, bytespp);
             break;
         case 0x514c4957:
             clidisp_decodeWILQ(conn, strm, x, y, width, height);
@@ -144,7 +189,8 @@ int main(int argc, char *argv[])
             argc, argv, params.fullScreen);
     clidisp_getPixelFormat(conn, &pixelFormat);
     bytespp = (pixelFormat.bitsPerPixel+7) / 8;
-    cliconn_setEncodings(strm, params.enableHextile);
+    cliconn_setEncodings(strm, params.enableHextile,
+            params.enableZRLE);
     cliconn_setPixelFormat(strm, &pixelFormat);
     cliconn_sendFramebufferUpdateRequest(strm, 0, 0, 0, width, height);
     lastShowFpTm = curTimeMs();

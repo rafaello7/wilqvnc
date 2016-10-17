@@ -7,6 +7,7 @@
 #include <sys/time.h>
 #include <lz4.h>
 #include <zstd.h>
+#include <zlib.h>
 #include "srvcmdline.h"
 #include "vnclog.h"
 
@@ -185,6 +186,99 @@ static unsigned long long curTimeMs(void)
     return tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
 }
 
+static int encodeTRLE(const unsigned *img, int itemsPerLine,
+        const RectangleArea *rect, unsigned squareWidth, char *buf)
+{
+    char *bp = buf;
+    int x, y, i, j, k;
+    unsigned imgOff = rect-> y * itemsPerLine + rect->x;
+
+    for(y = 0; y < rect->height; y += squareWidth) {
+        unsigned tileHeight = rect->height - y > squareWidth ? squareWidth :
+            rect->height - y;
+        for(x = 0; x < rect->width; x += squareWidth) {
+            unsigned tileWidth = rect->width - x > squareWidth ? squareWidth :
+                rect->width - x;
+            unsigned tileOff = imgOff + x;
+            unsigned colors[128], ncolors = 0;
+            for(i = 0; i < tileHeight && ncolors < 128; ++i) {
+                for(j = 0; j < tileWidth && ncolors < 128; ++j) {
+                    unsigned color = img[tileOff + j] & 0xffffff;
+                    for(k = 0; k < ncolors && color != colors[k]; ++k) {
+                    }
+                    colors[ncolors++] = color;
+                }
+                tileOff += itemsPerLine;
+            }
+            if( 1 || ncolors == 128 ) {
+                // raw encoding
+                *bp++ = 0;
+                tileOff = imgOff + x;
+                for(i = 0; i < tileHeight; ++i) {
+                    for(j = 0; j < tileWidth; ++j) {
+                        unsigned color = img[tileOff + j];
+                        *bp++ = color >> 16;
+                        *bp++ = color >> 8;
+                        *bp++ = color;
+                    }
+                    tileOff += itemsPerLine;
+                }
+            }else{
+            }
+        }
+        imgOff += squareWidth * itemsPerLine;
+    }
+    return bp - buf;
+}
+
+static void encodeZRLE(SockStream *strm, const char *curImg,
+        int bytesPerPixel, int bytesPerLine, const RectangleArea *rect)
+{
+    // TODO: associate with SockStream
+    static z_stream zstrm;
+    static int isInitialized = 0;
+    int rectlen, srclen, complen, deflateRes;
+    char *bufsrc, *bufdest;
+
+    rectlen = rect->width * rect->height * bytesPerPixel;
+    bufsrc = malloc(rectlen);
+    if( ! isInitialized ) {
+        zstrm.zalloc = NULL;
+        zstrm.zfree = NULL;
+        zstrm.opaque = NULL;
+        int initRes = deflateInit(&zstrm, Z_DEFAULT_COMPRESSION);
+        if( initRes != Z_OK )
+            log_fatal("deflateInit error=%d", initRes);
+        isInitialized = 1;
+    }
+    srclen = encodeTRLE((const unsigned*)curImg, bytesPerLine / bytesPerPixel,
+            rect, 64, bufsrc);
+    complen = deflateBound(&zstrm, srclen);
+    bufdest = malloc(complen);
+    zstrm.next_in = (Bytef*)bufsrc;
+    zstrm.avail_in = srclen;
+    zstrm.next_out = (Bytef*)bufdest;
+    zstrm.avail_out = complen;
+    while( 1 ) {
+        deflateRes = deflate(&zstrm, Z_SYNC_FLUSH);
+        if( deflateRes != Z_OK )
+            log_fatal("deflate error %d", deflateRes);
+        if( zstrm.avail_out != 0 )
+            break;
+        log_info(">> deflate buffer too small");
+        complen += 4096;
+        bufdest = realloc(bufdest, complen);
+        zstrm.next_out = (Bytef*)bufdest;
+        zstrm.avail_out = 4096;
+    }
+    complen -= zstrm.avail_out;
+    sock_writeU32(strm, 16);    // ZRLE
+    sock_writeU32(strm, complen);
+    sock_write(strm, bufdest, complen);
+    free(bufdest);
+    free(bufsrc);
+}
+
 void srvconn_sendRectEncoded(SockStream *strm, const char *prevImg,
         const char *curImg, int bytesPerPixel, int bytesPerLine,
         const RectangleArea *rect)
@@ -192,10 +286,12 @@ void srvconn_sendRectEncoded(SockStream *strm, const char *prevImg,
     const CmdLineParams *params = cmdline_getParams();
     int useDiff;
 
+    encodeZRLE(strm, curImg, bytesPerPixel, bytesPerLine, rect);
+    return;
     useDiff = params->useDiff && prevImg != NULL &&
         bytesPerPixel == sizeof(int) && bytesPerLine % sizeof(int) == 0;
     if( useDiff || params->compr != COMPR_NONE ) {
-        int rectlen, srclen, destlen, complen, method;
+        int rectlen, srclen, complen, comprMethod;
         char *bufsrc, *bufdest;
         const char *compressed;
         unsigned long long tmBeg = curTimeMs();
@@ -240,21 +336,20 @@ void srvconn_sendRectEncoded(SockStream *strm, const char *prevImg,
                 srcOff += linelen;
             }
         }
-
         switch( params->compr ) {
         case COMPR_LZ4:
-            destlen = LZ4_compressBound(srclen);
-            compressed = bufdest = malloc(destlen);
-            complen = LZ4_compress_fast(bufsrc, bufdest, srclen, destlen,
+            complen = LZ4_compressBound(srclen);
+            compressed = bufdest = malloc(complen);
+            complen = LZ4_compress_fast(bufsrc, bufdest, srclen, complen,
                     params->lz4Level);
-            method = 1;
+            comprMethod = 1;
             break;
         case COMPR_ZSTD:
-            destlen = ZSTD_compressBound(srclen);
-            compressed = bufdest = malloc(destlen);
-            complen = ZSTD_compress(bufdest, destlen, bufsrc, srclen, 
+            complen = ZSTD_compressBound(srclen);
+            compressed = bufdest = malloc(complen);
+            complen = ZSTD_compress(bufdest, complen, bufsrc, srclen, 
                     params->zstdLevel);
-            method = 2;
+            comprMethod = 2;
             break;
         default:
             bufdest = NULL;
@@ -264,18 +359,16 @@ void srvconn_sendRectEncoded(SockStream *strm, const char *prevImg,
         if( complen >= srclen ) {
             compressed = bufsrc;
             complen = srclen;
-            method = 0;
+            comprMethod = 0;
         }
         unsigned long long tmCur = curTimeMs();
         log_info("%d -> %d, %d%%  %llu ms", rectlen, complen,
                 100 * complen / rectlen, tmCur - tmBeg);
         sock_writeU32(strm, 0x514c4957);
-        if( useDiff ) {
-            sock_writeU32(strm, method | 8);
+        sock_writeU16(strm, useDiff ? 1 : 0);
+        sock_writeU16(strm, comprMethod);
+        if( useDiff )
             sock_writeU32(strm, srclen);
-        }else{
-            sock_writeU32(strm, method);
-        }
         sock_writeU32(strm, complen);
         sock_write(strm, compressed, complen);
         free(bufdest);

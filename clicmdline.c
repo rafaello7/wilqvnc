@@ -14,6 +14,7 @@ static void usage(void)
         "  -p |-passwd     <fname> - password file for authentication\n"
         "  -v |-verbose            - print some debug info\n"
         "  -x |-hextile            - enable Hextile encoding\n"
+        "  -Z |-zrle               - enable ZRLE encoding\n"
         "  -fp|-freqperiod         - print refresh frequency periodically\n"
         "  -h |-help               - print this help\n"
         "\n");
@@ -29,6 +30,7 @@ void cmdline_parse(int argc, char *argv[], CmdLineParams *params)
     params->fullScreen = 0;
     params->logLevel = 0;
     params->enableHextile = 0;
+    params->enableZRLE = 0;
     params->showFrameRate = 0;
     while( i < argc ) {
         if( !strcmp(argv[i], "-fs") || !strcmp(argv[i], "-fullscreen") )
@@ -39,6 +41,8 @@ void cmdline_parse(int argc, char *argv[], CmdLineParams *params)
             ++params->logLevel;
         else if( !strcmp(argv[i], "-x") || !strcmp(argv[i], "-hextile") )
             params->enableHextile = 1;
+        else if( !strcmp(argv[i], "-Z") || !strcmp(argv[i], "-zrle") )
+            params->enableZRLE = 1;
         else if( !strcmp(argv[i], "-fp") || !strcmp(argv[i], "-freqperiod") )
             params->showFrameRate = 1;
         else if( !strcmp(argv[i], "-h") ||  !strcmp(argv[i], "-help") )

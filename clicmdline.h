@@ -7,6 +7,7 @@ typedef struct {
     int fullScreen;
     int logLevel;
     int enableHextile;
+    int enableZRLE;
     int showFrameRate;
 } CmdLineParams;
 

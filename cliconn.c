@@ -121,11 +121,14 @@ void cliconn_readPixelFormat(SockStream *strm, PixelFormat *pixelFormat)
     sock_discard(strm, 3);     // padding
 }
 
-void cliconn_setEncodings(SockStream *strm, int enableHextile)
+void cliconn_setEncodings(SockStream *strm, int enableHextile,
+        int enableZRLE)
 {
     int encodingCount = 3;
 
     if( enableHextile )
+        ++encodingCount;
+    if( enableZRLE )
         ++encodingCount;
     sock_writeU8(strm, 2);    // message type
     sock_writeU8(strm, 0);    // padding
@@ -135,6 +138,8 @@ void cliconn_setEncodings(SockStream *strm, int enableHextile)
     sock_writeU32(strm, 2);   // RRE encoding
     if( enableHextile )
         sock_writeU32(strm, 5);   // Hextile encoding
+    if( enableZRLE )
+        sock_writeU32(strm, 16);   // ZRLE encoding
     sock_flush(strm);
 }
 

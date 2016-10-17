@@ -8,7 +8,8 @@ VncVersion cliconn_exchangeVersion(SockStream*);
 void cliconn_exchangeAuth(SockStream*, const char *passwdFile,
         VncVersion vncVer);
 void cliconn_readPixelFormat(SockStream*, PixelFormat*);
-void cliconn_setEncodings(SockStream*, int enableHextile);
+void cliconn_setEncodings(SockStream*, int enableHextile,
+        int enableZRLE);
 void cliconn_setPixelFormat(SockStream*, const PixelFormat*);
 void cliconn_sendFramebufferUpdateRequest(SockStream*, int incremental,
         int x, int y, int width, int height);

@@ -302,20 +302,21 @@ void clidisp_putRectFromSocket(DisplayConnection *conn, SockStream *strm,
 void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
         int x, int y, int width, int height)
 {
-    int method, srclen, complen, res;
+    int encMethod, comprMethod, srclen, complen, res;
     int bytesPerLine = conn->img->bytes_per_line;
     int bytespp = (conn->img->bits_per_pixel + 7) / 8;
     char *compressed, *uncompressed;
 
-    method = sock_readU32(strm);
-    if( method & 8 )
+    encMethod = sock_readU16(strm);
+    comprMethod = sock_readU16(strm);
+    if( encMethod )
         srclen = sock_readU32(strm);
     else
         srclen = width * height * bytespp; 
     complen = sock_readU32(strm);
     compressed = malloc(complen);
     sock_read(strm, compressed, complen);
-    switch( method & 7 ) {
+    switch( comprMethod ) {
     case 0:
         uncompressed = compressed;
         if( complen != srclen )
@@ -341,9 +342,9 @@ void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
     case 3:
         break;
     default:
-        log_fatal("unsupported WILQ compression method %d", method);
+        log_fatal("unsupported WILQ compression method %d", comprMethod);
     }
-    if( method & 8 ) {
+    if( encMethod == 1 ) {
         int itemsPerLine = bytesPerLine / sizeof(int);
         const unsigned *buf = (const unsigned*)uncompressed;
         unsigned *img = (unsigned*)(conn->img->data + y * bytesPerLine
@@ -366,7 +367,7 @@ void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
         if( row != height || col != 0 )
             log_fatal("decodeDiff: bad data, %dx%d, row=%d, col=%d, "
                         "nitems=%d", width, height, row, col, nitems);
-    }else{
+    }else if( encMethod == 0 ) {
         int srcOff = 0;
         int srcLineBytes = width * bytespp;
         int dataOff = y * bytesPerLine + x * bytespp;
@@ -376,7 +377,8 @@ void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
             dataOff += bytesPerLine;
             srcOff += srcLineBytes;
         }
-    }
+    }else
+        log_fatal("unsupported WILQ encoding method %d", encMethod);
     free(compressed);
     if( uncompressed != compressed )
         free(uncompressed);
@@ -422,6 +424,124 @@ void clidisp_fillRect(DisplayConnection *conn, const char *pixel, int x, int y,
                 conn->img->data + y * conn->img->bytes_per_line + x * bytespp,
                 width * bytespp);
     }
+}
+
+void clidisp_decodeTRLE(DisplayConnection *conn, const void *data, int datalen,
+        int x, int y, int width, int height, unsigned squareWidth)
+{
+    const unsigned char *dp = data;
+    int sx, sy, i, j;
+    int bytespp = (conn->img->bits_per_pixel + 7) / 8;
+    int itemsPerLine = conn->img->bytes_per_line / bytespp;
+    unsigned imgOff = y * itemsPerLine + x;
+    unsigned *img = (unsigned*)conn->img->data;
+    unsigned colors[128], ncolorsLast = 0;
+
+    for(sy = 0; sy < height; sy += squareWidth) {
+        unsigned tileHeight = height - sy > squareWidth ? squareWidth :
+            height - sy;
+        for(sx = 0; sx < width; sx += squareWidth) {
+            unsigned tileWidth = width - sx > squareWidth ? squareWidth :
+                width - sx;
+            unsigned tileOff = imgOff + sx;
+            unsigned ncolors = *dp++;
+            if( ncolors == 0 ) {
+                for(i = 0; i < tileHeight; ++i) {
+                    for(j = 0; j < tileWidth; ++j) {
+                        // TODO: this depends on endianess
+                        unsigned color = *dp++;
+                        color |= *dp++ << 8;
+                        color |= *dp++ << 16;
+                        img[tileOff + j] = color;
+                    }
+                    tileOff += itemsPerLine;
+                }
+            }else if( ncolors == 128 ) {
+                unsigned run = 0, r, color;
+                for(i = 0; i < tileHeight; ++i) {
+                    for(j = 0; j < tileWidth; ++j) {
+                        if( run == 0 ) {
+                            // TODO: this depends on endianess
+                            color = *dp++;
+                            color |= *dp++ << 8;
+                            color |= *dp++ << 16;
+
+                            run = 1;
+                            while( (r = *dp++) == 255 )
+                                run += 255;
+                            run += r;
+                        }
+                        img[tileOff + j] = color;
+                        --run;
+                    }
+                    tileOff += itemsPerLine;
+                }
+            }else{
+                if( ncolors == 127 || ncolors == 129 ) {
+                    ncolors = ncolorsLast | (ncolors & 0x80);
+                }else{
+                    ncolorsLast = ncolors & 0x7f;
+                    for(i = 0; i < ncolorsLast; ++i) {
+                        // TODO: this depends on endianess
+                        unsigned color = *dp++;
+                        color |= *dp++ << 8;
+                        color |= *dp++ << 16;
+                        colors[i] = color;
+                    }
+                }
+                if( ncolors < 128 ) {
+                    unsigned shift, mask;
+                    if( ncolors == 1 ) {
+                        shift = 0;
+                    }else if( ncolors == 2 ) {
+                        shift = 1;
+                    }else if( ncolors <= 4 ) {
+                        shift = 2;
+                    }else if( ncolors <= 16 )
+                        shift = 4;
+                    else
+                        shift = 8;
+                    mask = (1 << shift) - 1;
+                    for(i = 0; i < tileHeight; ++i) {
+                        unsigned bcount = shift == 0 ? 0 : 8, b;
+                        for(j = 0; j < tileWidth; ++j) {
+                            if( bcount == 8 ) {
+                                b = *dp++;
+                                bcount = 0;
+                            }
+                            b <<= shift;
+                            img[tileOff + j] = colors[(b >> 8) & mask];
+                            bcount += shift;
+                        }
+                        tileOff += itemsPerLine;
+                    }
+                }else{
+                    unsigned b, run = 0, r;
+                    for(i = 0; i < tileHeight; ++i) {
+                        for(j = 0; j < tileWidth; ++j) {
+                            if( run == 0 ) {
+                                b = *dp++;
+                                run = 1;
+                                if( b & 0x80 ) {
+                                    while( (r = *dp++) == 255 )
+                                        run += 255;
+                                    run += r;
+                                    b &= 0x7f;
+                                }
+                            }
+                            img[tileOff + j] = colors[b];
+                            --run;
+                        }
+                        tileOff += itemsPerLine;
+                    }
+                }
+            }
+        }
+        imgOff += squareWidth * itemsPerLine;
+    }
+    if( dp - (const unsigned char*)data != datalen )
+        log_fatal("ZRLE data length mismatch: got %d bytes, used %d bytes",
+                datalen, dp - (const unsigned char*)data);
 }
 
 void clidisp_close(DisplayConnection *conn)
