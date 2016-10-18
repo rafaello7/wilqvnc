@@ -191,7 +191,7 @@ static int encodeTRLE(const unsigned *img, int itemsPerLine,
 {
     char *bp = buf;
     int x, y, i, j, k;
-    unsigned imgOff = rect-> y * itemsPerLine + rect->x;
+    unsigned imgOff = rect->y * itemsPerLine + rect->x;
 
     for(y = 0; y < rect->height; y += squareWidth) {
         unsigned tileHeight = rect->height - y > squareWidth ? squareWidth :
@@ -206,24 +206,101 @@ static int encodeTRLE(const unsigned *img, int itemsPerLine,
                     unsigned color = img[tileOff + j] & 0xffffff;
                     for(k = 0; k < ncolors && color != colors[k]; ++k) {
                     }
-                    colors[ncolors++] = color;
+                    if( k == ncolors )
+                        colors[ncolors++] = color;
                 }
                 tileOff += itemsPerLine;
             }
-            if( 1 || ncolors == 128 ) {
+            if( ncolors < 128 ) {
+                *bp++ = ncolors | (ncolors <= 16 ? 0 : 0x80);
+                for(i = 0; i < ncolors; ++i) {
+                    unsigned color = colors[i];
+                    *bp++ = color;
+                    *bp++ = color >> 8;
+                    *bp++ = color >> 16;
+                }
+                if( ncolors > 1 ) {
+                    if( ncolors <= 16 ) {
+                        unsigned shift;
+                        if( ncolors <= 2 ) {
+                            shift = 1;
+                        }else if( ncolors <= 4 ) {
+                            shift = 2;
+                        }else
+                            shift = 4;
+                        tileOff = imgOff + x;
+                        for(i = 0; i < tileHeight; ++i) {
+                            unsigned b = 0, bcount = 0;
+                            for(j = 0; j < tileWidth; ++j) {
+                                unsigned color = img[tileOff + j] & 0xffffff;
+                                for( k = 0; colors[k] != color; ++k ) {
+                                }
+                                b = b << shift | k;
+                                bcount += shift;
+                                if( bcount == 8 ) {
+                                    *bp++ = b;
+                                    b = 0;
+                                    bcount = 0;
+                                }
+                            }
+                            if( bcount != 0 )
+                                *bp++ = b << (8 - bcount);
+                            tileOff += itemsPerLine;
+                        }
+                    }else{
+                        tileOff = imgOff + x;
+                        unsigned curPixel, prevDist;
+                        for(i = 0; i < tileHeight; ++i) {
+                            for(int j = 0; j < tileWidth; ++j) {
+                                unsigned color = img[tileOff + j] & 0xffffff;
+                                if( i == 0 && j == 0 ) {
+                                    curPixel = color;
+                                    prevDist = 0;
+                                }else if( color != curPixel ) {
+                                    for( k = 0; colors[k] != curPixel; ++k ) {
+                                    }
+                                    if( prevDist > 0 ) {
+                                        *bp++ = k | 0x80;
+                                        while( prevDist >= 255 ) {
+                                            *bp++ = 255;
+                                            prevDist -= 255;
+                                        }
+                                        *bp++ = prevDist;
+                                    }else
+                                        *bp++ = k;
+                                    curPixel = color;
+                                    prevDist = 0;
+                                }else
+                                    ++prevDist;
+                            }
+                            tileOff += itemsPerLine;
+                        }
+                        for( k = 0; colors[k] != curPixel; ++k ) {
+                        }
+                        if( prevDist > 0 ) {
+                            *bp++ = k | 0x80;
+                            while( prevDist >= 255 ) {
+                                *bp++ = 255;
+                                prevDist -= 255;
+                            }
+                            *bp++ = prevDist;
+                        }else
+                            *bp++ = k;
+                    }
+                }
+            }else{
                 // raw encoding
                 *bp++ = 0;
                 tileOff = imgOff + x;
                 for(i = 0; i < tileHeight; ++i) {
                     for(j = 0; j < tileWidth; ++j) {
                         unsigned color = img[tileOff + j];
-                        *bp++ = color >> 16;
-                        *bp++ = color >> 8;
                         *bp++ = color;
+                        *bp++ = color >> 8;
+                        *bp++ = color >> 16;
                     }
                     tileOff += itemsPerLine;
                 }
-            }else{
             }
         }
         imgOff += squareWidth * itemsPerLine;
@@ -239,6 +316,7 @@ static void encodeZRLE(SockStream *strm, const char *curImg,
     static int isInitialized = 0;
     int rectlen, srclen, complen, deflateRes;
     char *bufsrc, *bufdest;
+    unsigned long long tmBeg = curTimeMs();
 
     rectlen = rect->width * rect->height * bytesPerPixel;
     bufsrc = malloc(rectlen);
@@ -272,6 +350,9 @@ static void encodeZRLE(SockStream *strm, const char *curImg,
         zstrm.avail_out = 4096;
     }
     complen -= zstrm.avail_out;
+    unsigned long long tmCur = curTimeMs();
+    log_info("ZRLE %dx%d %d -> %d %lld ms",
+            rect->width, rect->height, rectlen, complen, tmCur - tmBeg);
     sock_writeU32(strm, 16);    // ZRLE
     sock_writeU32(strm, complen);
     sock_write(strm, bufdest, complen);

@@ -515,7 +515,7 @@ void clidisp_decodeTRLE(DisplayConnection *conn, const void *data, int datalen,
                         }
                         tileOff += itemsPerLine;
                     }
-                }else{
+                }else{  // RLE
                     unsigned b, run = 0, r;
                     for(i = 0; i < tileHeight; ++i) {
                         for(j = 0; j < tileWidth; ++j) {
