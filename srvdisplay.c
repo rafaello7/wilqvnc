@@ -163,14 +163,19 @@ void srvdisp_getPixelFormat(DisplayConnection *conn, PixelFormat *pixelFormat)
 
 void srvdisp_generateKeyEvent(DisplayConnection *conn, const VncKeyEvent *ev)
 {
-    KeyCode keycode = XKeysymToKeycode(conn->d, ev->keysym);
+    KeyCode keycode;
+
+    if( ev->keysym == 60 )
+        keycode = 59;
+    else
+        keycode = XKeysymToKeycode(conn->d, ev->keysym);
     if( keycode != 0 )
         XTestFakeKeyEvent(conn->d, keycode, ev->isDown, CurrentTime);
     else{
         static int isWarned = 0;
         if( ! isWarned )
             log_warn("unknown keycode for keysym %d\nplease load proper "
-                 "keyboard layout using setxkbmap or setmodmap", ev->keysym);
+                 "keyboard layout using setxkbmap or xmodmap", ev->keysym);
     }
 }
 
