@@ -201,13 +201,30 @@ static int encodeTRLE(const unsigned *img, int itemsPerLine,
                 rect->width - x;
             unsigned tileOff = imgOff + x;
             unsigned colors[128], ncolors = 0;
+            int hasheads[256], hashnext[128];
+
+            memset(hasheads, 0, sizeof(hasheads));
             for(i = 0; i < tileHeight && ncolors < 128; ++i) {
                 for(j = 0; j < tileWidth && ncolors < 128; ++j) {
                     unsigned color = img[tileOff + j] & 0xffffff;
-                    for(k = 0; k < ncolors && color != colors[k]; ++k) {
+                    unsigned hash = (color + (color >> 8) + (color >> 16))
+                        & 0xff;
+                    if( hasheads[hash] == 0 ) {
+                        hasheads[hash] = ncolors + 1;
+                        hashnext[ncolors] = -1;
+                        colors[ncolors] = color;
+                        ++ncolors;
+                    }else{
+                        k = hasheads[hash] - 1;
+                        while( colors[k] != color && hashnext[k] != -1 )
+                            k = hashnext[k];
+                        if( colors[k] != color ) {
+                            hashnext[k] = ncolors;
+                            hashnext[ncolors] = -1;
+                            colors[ncolors] = color;
+                            ++ncolors;
+                        }
                     }
-                    if( k == ncolors )
-                        colors[ncolors++] = color;
                 }
                 tileOff += itemsPerLine;
             }
@@ -233,7 +250,11 @@ static int encodeTRLE(const unsigned *img, int itemsPerLine,
                             unsigned b = 0, bcount = 0;
                             for(j = 0; j < tileWidth; ++j) {
                                 unsigned color = img[tileOff + j] & 0xffffff;
-                                for( k = 0; colors[k] != color; ++k ) {
+                                unsigned hash = (color + (color >> 8) +
+                                        (color >> 16)) & 0xff;
+                                for(k = hasheads[hash] - 1; colors[k] != color;
+                                        k = hashnext[k])
+                                {
                                 }
                                 b = b << shift | k;
                                 bcount += shift;
@@ -257,7 +278,11 @@ static int encodeTRLE(const unsigned *img, int itemsPerLine,
                                     curPixel = color;
                                     prevDist = 0;
                                 }else if( color != curPixel ) {
-                                    for( k = 0; colors[k] != curPixel; ++k ) {
+                                    unsigned hash = (curPixel + (curPixel >> 8)
+                                            + (curPixel >> 16)) & 0xff;
+                                    for(k = hasheads[hash] - 1;
+                                        colors[k] != curPixel; k = hashnext[k])
+                                    {
                                     }
                                     if( prevDist > 0 ) {
                                         *bp++ = k | 0x80;
@@ -275,7 +300,11 @@ static int encodeTRLE(const unsigned *img, int itemsPerLine,
                             }
                             tileOff += itemsPerLine;
                         }
-                        for( k = 0; colors[k] != curPixel; ++k ) {
+                        unsigned hash = (curPixel + (curPixel >> 8)
+                                + (curPixel >> 16)) & 0xff;
+                        for(k = hasheads[hash] - 1; colors[k] != curPixel;
+                                k = hashnext[k])
+                        {
                         }
                         if( prevDist > 0 ) {
                             *bp++ = k | 0x80;
@@ -308,7 +337,7 @@ static int encodeTRLE(const unsigned *img, int itemsPerLine,
     return bp - buf;
 }
 
-static void encodeZRLE(SockStream *strm, const char *curImg,
+void encodeZRLE(SockStream *strm, const char *curImg,
         int bytesPerPixel, int bytesPerLine, const RectangleArea *rect)
 {
     // TODO: associate with SockStream
@@ -360,77 +389,94 @@ static void encodeZRLE(SockStream *strm, const char *curImg,
     free(bufsrc);
 }
 
+static int encodeDiff(const unsigned *prevImg, const unsigned *curImg,
+        int itemsPerLine, const RectangleArea *rect, char *bufsrc)
+{
+    int dataOff = rect->y * itemsPerLine + rect->x;
+    unsigned *buf = (unsigned*)bufsrc;
+    int srclen = 0;
+
+    unsigned curPixel;
+    unsigned prevDist = 255;
+    for(int i = 0; i < rect->height; ++i) {
+        for(int j = 0; j < rect->width; ++j) {
+            ++prevDist;
+            if( prevDist == 256 || curImg[dataOff+j] != prevImg[dataOff+j]) {
+                if( i || j )
+                    buf[srclen++] = (curPixel&0xffffff) | (prevDist-1) << 24;
+                curPixel = curImg[dataOff + j];
+                prevDist = 0;
+            }
+        }
+        dataOff += itemsPerLine;
+    }
+    buf[srclen++] = (curPixel&0xffffff) | prevDist << 24;
+    return srclen * sizeof(int);
+}
+
 void srvconn_sendRectEncoded(SockStream *strm, const char *prevImg,
         const char *curImg, int bytesPerPixel, int bytesPerLine,
         const RectangleArea *rect)
 {
     const CmdLineParams *params = cmdline_getParams();
-    int useDiff;
+    EncodingType encType = params->encType;
+    CompressionType compr = params->compr;
+    int rectlen = rect->width * rect->height * bytesPerPixel;
 
-    encodeZRLE(strm, curImg, bytesPerPixel, bytesPerLine, rect);
-    return;
-    useDiff = params->useDiff && prevImg != NULL &&
-        bytesPerPixel == sizeof(int) && bytesPerLine % sizeof(int) == 0;
-    if( useDiff || params->compr != COMPR_NONE ) {
-        int rectlen, srclen, complen, comprMethod;
+    if( (encType == ENC_DIFF && prevImg == NULL) ||
+            bytesPerPixel != sizeof(int) || bytesPerLine % sizeof(int) != 0 )
+        encType = ENC_NONE;
+    if( encType != ENC_NONE || compr != COMPR_NONE ) {
+        int srclen, complen;
         char *bufsrc, *bufdest;
         const char *compressed;
         unsigned long long tmBeg = curTimeMs();
 
-        rectlen = rect->width * rect->height * bytesPerPixel;
         bufsrc = malloc(rectlen);
-        if( useDiff ) {
-            const unsigned *prev = (const unsigned*)prevImg;
-            const unsigned *cur = (const unsigned*)curImg;
-            int itemsPerLine = bytesPerLine / sizeof(int);
-            int dataOff = rect->y * itemsPerLine + rect->x;
-            unsigned *buf = (unsigned*)bufsrc;
-            srclen = 0;
+        switch( encType ) {
+        case ENC_DIFF:
+            srclen = encodeDiff((const unsigned*)prevImg,
+                    (const unsigned*)curImg, bytesPerLine / sizeof(int),
+                    rect, bufsrc);
+            break;
+        case ENC_TRLE:
+            srclen = encodeTRLE((const unsigned*)curImg,
+                    bytesPerLine / sizeof(int), rect, 64, bufsrc);
+            break;
+        default:
+            {
+                int dataOff = rect->y * bytesPerLine + rect->x * bytesPerPixel;
+                int linelen = rect->width * bytesPerPixel;
+                srclen = rectlen;
+                int srcOff = 0;
 
-            unsigned curPixel;
-            unsigned prevDist = 255;
-            for(int i = 0; i < rect->height; ++i) {
-                for(int j = 0; j < rect->width; ++j) {
-                    if( ++prevDist == 256 || cur[dataOff+j] != prev[dataOff+j])
-                    {
-                        if( i || j ) {
-                            buf[srclen++] =
-                                (curPixel&0xffffff) | (prevDist-1) << 24;
-                        }
-                        curPixel = cur[dataOff + j];
-                        prevDist = 0;
-                    }
+                for(int i = 0; i < rect->height; ++i) {
+                    memcpy(bufsrc + srcOff, curImg + dataOff, linelen);
+                    dataOff += bytesPerLine;
+                    srcOff += linelen;
                 }
-                dataOff += itemsPerLine;
             }
-            buf[srclen++] = (curPixel&0xffffff) | prevDist << 24;
-            srclen *= sizeof(int);
-        }else{
-            int dataOff = rect->y * bytesPerLine + rect->x * bytesPerPixel;
-            int linelen = rect->width * bytesPerPixel;
-            srclen = rectlen;
-            int srcOff = 0;
-
-            for(int i = 0; i < rect->height; ++i) {
-                memcpy(bufsrc + srcOff, curImg + dataOff, linelen);
-                dataOff += bytesPerLine;
-                srcOff += linelen;
-            }
+            break;
         }
-        switch( params->compr ) {
+        switch( compr ) {
         case COMPR_LZ4:
             complen = LZ4_compressBound(srclen);
             compressed = bufdest = malloc(complen);
             complen = LZ4_compress_fast(bufsrc, bufdest, srclen, complen,
                     params->lz4Level);
-            comprMethod = 1;
+            if( srclen == 8 && complen == 8 ) {
+                printf("src=");
+                for(int i = 0; i < srclen; ++i) {
+                    printf(" %d", (unsigned char)bufsrc[i]);
+                }
+                printf("\n");
+            }
             break;
         case COMPR_ZSTD:
             complen = ZSTD_compressBound(srclen);
             compressed = bufdest = malloc(complen);
             complen = ZSTD_compress(bufdest, complen, bufsrc, srclen, 
                     params->zstdLevel);
-            comprMethod = 2;
             break;
         default:
             bufdest = NULL;
@@ -440,21 +486,22 @@ void srvconn_sendRectEncoded(SockStream *strm, const char *prevImg,
         if( complen >= srclen ) {
             compressed = bufsrc;
             complen = srclen;
-            comprMethod = 0;
+            compr = COMPR_NONE;
         }
         unsigned long long tmCur = curTimeMs();
-        log_info("%d -> %d, %d%%  %llu ms", rectlen, complen,
-                100 * complen / rectlen, tmCur - tmBeg);
+        log_info("%7d -> %7d -> %7d, %3d%%  %3llu ms", rectlen, srclen,
+                complen, 100 * complen / rectlen, tmCur - tmBeg);
         sock_writeU32(strm, 0x514c4957);
-        sock_writeU16(strm, useDiff ? 1 : 0);
-        sock_writeU16(strm, comprMethod);
-        if( useDiff )
-            sock_writeU32(strm, srclen);
+        sock_writeU16(strm, encType);
+        sock_writeU16(strm, compr);
         sock_writeU32(strm, complen);
+        if( encType != ENC_NONE )
+            sock_writeU32(strm, srclen);
         sock_write(strm, compressed, complen);
         free(bufdest);
         free(bufsrc);
     }else{
+        log_info("%7d -> %7d -> %7d, 100%%    0 ms", rectlen, rectlen, rectlen);
         sock_writeU32(strm, 0);
         sock_writeRect(strm, curImg + rect->y * bytesPerLine +
                 rect->x * bytesPerPixel, bytesPerLine,

@@ -28,6 +28,8 @@ static const char *usage(const char *progname, char *buf, int buflen)
         "parameters:\n"
         "  -zs|-zstd           <level> - set compression level on zstd\n"
         "  -lz|-lz4            <level> - set compression level on lz4\n"
+        "  -e |-enc         <encoding> - encoding to use\n"
+        "                                one of: diff, trle, none\n"
         "  -c |-compr    <compression> - compression to use\n"
         "                                one of: zstd, lz4, none\n"
         "  -p |-passwd         <fname> - password file for authentication\n"
@@ -36,7 +38,6 @@ static const char *usage(const char *progname, char *buf, int buflen)
         "  -h |-help                   - print this help\n"
         "  -[no]mm                     - CopyRect discovery by mouse move\n"
         "  -[no]vm                     - CopyRect vertical move discovery\n"
-        "  -[no]diff                   - pixel-by-pixel difference\n"
         "  -once                       - run once (no fork)\n",
         progname);
     return buf;
@@ -74,6 +75,24 @@ const char *cmdline_parse(int argc, char *argv[])
                         "unrecognized compression type %s", argv[i]);
                 return resultBuf;
             }
+        }else if( !strcmp(argv[i], "-e") || !strcmp(argv[i], "-enc") ) {
+            if( i == argc - 1 )
+                goto noparam_err;
+            switch( argv[++i][0] ) {
+            case 'd':
+                gParams.encType = ENC_DIFF;
+                break;
+            case 't':
+                gParams.encType = ENC_TRLE;
+                break;
+            case 'n':
+                gParams.encType = ENC_NONE;
+                break;
+            default:
+                snprintf(resultBuf, sizeof(resultBuf),
+                        "unrecognized encoding type %s", argv[i]);
+                return resultBuf;
+            }
         }else if( !strcmp(argv[i], "-p") || !strcmp(argv[i], "-passwd") )
             gParams.passwdFile = argv[++i];
         else if( !strcmp(argv[i], "-v") || !strcmp(argv[i], "-verbose") )
@@ -90,10 +109,6 @@ const char *cmdline_parse(int argc, char *argv[])
             gParams.discoverVerticalMovement = 1;
         else if( !strcmp(argv[i], "-novm") )
             gParams.discoverVerticalMovement = 0;
-        else if( !strcmp(argv[i], "-diff") )
-            gParams.useDiff = 1;
-        else if( !strcmp(argv[i], "-nodiff") )
-            gParams.useDiff = 0;
         else if( !strcmp(argv[i], "-once") )
             gParams.runOnce = 1;
         else if( argv[i][0] == '-' ) {
@@ -183,18 +198,20 @@ void cmdline_recvCtlMsg(void)
         sprintf(buf,
                 "    zstd compression level (-zs):         %d\n"
                 "    lz4  compression level (-lz):         %d\n"
+                "    encoding used (-e diff/trle/none):    %s\n"
                 "    compression used (-c zstd/lz4/none):  %s\n"
                 "    discover movement by mouse (-[no]mm): %s\n"
                 "    discover vertical movement (-[no]vm): %s\n"
-                "    use diff (-[no]diff):                 %s\n"
                 "    log level (-v/-q):                    %d\n",
                 gParams.zstdLevel, gParams.lz4Level,
+                gParams.encType == ENC_DIFF ? "diff" :
+                gParams.encType == ENC_TRLE ? "trle" :
+                gParams.encType == ENC_NONE ? "none" : "unknown",
                 gParams.compr == COMPR_ZSTD ? "zstd" :
                 gParams.compr == COMPR_LZ4  ? "lz4" :
                 gParams.compr == COMPR_NONE ? "none" : "unknown",
                 boolStr[gParams.discoverMouseMovement],
                 boolStr[gParams.discoverVerticalMovement],
-                boolStr[gParams.useDiff],
                 gParams.logLevel);
         err = buf;
     }

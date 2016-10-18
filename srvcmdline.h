@@ -1,22 +1,17 @@
 #ifndef SRVCMDLINE_H
 #define SRVCMDLINE_H
 
-
-typedef enum {
-    COMPR_NONE,
-    COMPR_ZSTD,
-    COMPR_LZ4
-} CompressionType;
+#include "vnccommon.h"
 
 typedef struct {
     int zstdLevel;
     int lz4Level;
     CompressionType compr;
+    EncodingType encType;
     const char *passwdFile;
     int logLevel;
     int discoverMouseMovement;
     int discoverVerticalMovement;
-    int useDiff;
     int vncDisplayNumber;
     int runOnce;
 } CmdLineParams;

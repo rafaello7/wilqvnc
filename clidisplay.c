@@ -309,27 +309,27 @@ void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
 
     encMethod = sock_readU16(strm);
     comprMethod = sock_readU16(strm);
-    if( encMethod )
+    complen = sock_readU32(strm);
+    if( encMethod != ENC_NONE )
         srclen = sock_readU32(strm);
     else
         srclen = width * height * bytespp; 
-    complen = sock_readU32(strm);
     compressed = malloc(complen);
     sock_read(strm, compressed, complen);
     switch( comprMethod ) {
-    case 0:
+    case COMPR_NONE:
         uncompressed = compressed;
         if( complen != srclen )
             log_fatal("decodeRaw: size does not match, got %d, expected %d",
                     complen, srclen);
         break;
-    case 1:
+    case COMPR_LZ4:
         uncompressed = malloc(srclen);
         res = LZ4_decompress_safe(compressed, uncompressed, complen, srclen);
         if( res != srclen )
             log_fatal("LZ4_decompress_safe: srclen=%d, res=%d", srclen, res);
         break;
-    case 2:
+    case COMPR_ZSTD:
         uncompressed = malloc(srclen);
         res = ZSTD_decompress(uncompressed, srclen, compressed, complen);
         if( res != srclen ) {
@@ -339,12 +339,10 @@ void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
             log_fatal("ZSTD_decompress: srclen=%d, res=%d", srclen, res);
         }
         break;
-    case 3:
-        break;
     default:
         log_fatal("unsupported WILQ compression method %d", comprMethod);
     }
-    if( encMethod == 1 ) {
+    if( encMethod == ENC_DIFF ) {
         int itemsPerLine = bytesPerLine / sizeof(int);
         const unsigned *buf = (const unsigned*)uncompressed;
         unsigned *img = (unsigned*)(conn->img->data + y * bytesPerLine
@@ -367,7 +365,9 @@ void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
         if( row != height || col != 0 )
             log_fatal("decodeDiff: bad data, %dx%d, row=%d, col=%d, "
                         "nitems=%d", width, height, row, col, nitems);
-    }else if( encMethod == 0 ) {
+    }else if( encMethod == ENC_TRLE ) {
+        clidisp_decodeTRLE(conn, uncompressed, srclen, x, y, width, height, 64);
+    }else if( encMethod == ENC_NONE ) {
         int srcOff = 0;
         int srcLineBytes = width * bytespp;
         int dataOff = y * bytesPerLine + x * bytespp;
