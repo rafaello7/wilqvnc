@@ -449,56 +449,62 @@ struct Tile {
     int color;
 };
 
-static void encodeSubTile(struct BitPacker *bitPacker,
-        struct Tile **tileSquares,
-        int lvl, int x, int y, int rectWidth, int rectHeight,
-        unsigned colorBits, unsigned *colors, int *hasheads, int *hashnext)
+struct EncSubTileParam {
+    struct BitPacker bpColors;
+    struct BitPacker bpSquares;
+    int rectWidth, rectHeight;
+    const unsigned *colors;
+    const int *hasheads;
+    const int *hashnext;
+    unsigned colorBits;
+    struct Tile *const *tileSquares;
+};
+
+static void encodeSubTile(struct EncSubTileParam *estp, int lvl, int x, int y)
 {
     if( lvl == 0 ) {
-        unsigned color = tileSquares[0][y * rectWidth + x].color;
-        if( colors != NULL ) {
+        unsigned color = estp->tileSquares[0][y * estp->rectWidth + x].color;
+        if( estp->colors != NULL ) {
             unsigned hash = (color + (color >> 12)) & 0xfff;
-            int colorIdx = hasheads[hash] - 1;
-            while( colors[colorIdx] != color )
-                colorIdx = hashnext[colorIdx];
+            int colorIdx = estp->hasheads[hash] - 1;
+            while( estp->colors[colorIdx] != color )
+                colorIdx = estp->hashnext[colorIdx];
             color = colorIdx;
         }
-        pushBits(bitPacker, color, colorBits);
+        pushBits(&estp->bpColors, color, estp->colorBits);
         //log_info("encodeSubTile: lvl=%d, x=%d, y=%d, color=%d",
         //        lvl, x, y, colorIdx);
     }else{
         int psubWidth = 1 << (lvl-1);
-        int phcount = (rectWidth + psubWidth - 1) / psubWidth;
-        int pvcount = (rectHeight + psubWidth - 1) / psubWidth;
+        int phcount = (estp->rectWidth + psubWidth - 1) / psubWidth;
+        int pvcount = (estp->rectHeight + psubWidth - 1) / psubWidth;
         int hcount = (phcount+1) / 2;
-        int squareCount = tileSquares[lvl][y * hcount + x].squareCount;
+        int squareCount = estp->tileSquares[lvl][y * hcount + x].squareCount;
 
         if( squareCount > 1 ) {
-            pushBits(bitPacker, 1, 1);
+            pushBits(&estp->bpSquares, 1, 1);
             for(int sy = 0; sy < 2; ++sy) {
                 int py = 2 * y + sy;
                 if( py < pvcount ) {
                     for(int sx = 0; sx < 2; ++sx) {
                         int px = 2 * x + sx;
                         if( px < phcount ) {
-                            encodeSubTile(bitPacker, tileSquares, lvl-1,
-                                px, py, rectWidth, rectHeight, colorBits,
-                                colors, hasheads, hashnext);
+                            encodeSubTile(estp, lvl-1, px, py);
                         }
                     }
                 }
             }
         }else{
-            unsigned color = tileSquares[lvl][y * hcount + x].color;
-            if( colors != NULL ) {
+            unsigned color = estp->tileSquares[lvl][y * hcount + x].color;
+            if( estp->colors != NULL ) {
                 unsigned hash = (color + (color >> 12)) & 0xfff;
-                int colorIdx = hasheads[hash] - 1;
-                while( colors[colorIdx] != color )
-                    colorIdx = hashnext[colorIdx];
+                int colorIdx = estp->hasheads[hash] - 1;
+                while( estp->colors[colorIdx] != color )
+                    colorIdx = estp->hashnext[colorIdx];
                 color = colorIdx;
             }
-            pushBits(bitPacker, 0, 1);
-            pushBits(bitPacker, color, colorBits);
+            pushBits(&estp->bpSquares, 0, 1);
+            pushBits(&estp->bpColors, color, estp->colorBits);
             //log_info("encodeSubTile: lvl=%d, x=%d, y=%d, color=%d",
             //        lvl, x, y, colorIdx);
         }
@@ -619,28 +625,33 @@ static int encodeTila(const unsigned *img, int itemsPerLine,
             }
         }
     }
-    int colorBits = 0;
-    while( ncolors > 1 << colorBits )
-        ++colorBits;
+    int colorBits;
+    if( ncolors <= 1 )
+        colorBits = 0;
+    else{
+        colorBits = 1;
+        while( colorBits < 32 && ncolors > 1 << colorBits )
+            colorBits *= 2;
+    }
     int squareCount = tileSquares[levelCount-1][0].squareCount;
     int squareBits = tileSquares[levelCount-1][0].squareBits;
-    int estimateWithPalette = 4 + ncolors * sizeof(int) +
-            (squareCount * colorBits + squareBits + 7) / 8;
-    int estimateNoPalette = 4 + squareCount * sizeof(int)
-        + (squareBits + 7) / 8;
-    int estimate;
+    int estimateWithPalette = ncolors * sizeof(int) +
+            (squareCount * colorBits + 7) / 8;
+    int estimateNoPalette = squareCount * sizeof(int);
+    int estimateColorBytes;
     if( estimateWithPalette >= estimateNoPalette ) {
         ncolors = 0;
         colorBits = 32;
-        estimate = estimateNoPalette;
+        estimateColorBytes = estimateNoPalette;
         free(colors);
         colors = NULL;
         free(hashnext);
         hashnext = NULL;
     }else
-        estimate = estimateWithPalette;
+        estimateColorBytes = estimateWithPalette;
+    int estimateSquareBytes = (squareBits + 7) / 8;
     int encBytes = -1;
-    if( estimate < rectlen ) {
+    if( estimateColorBytes + estimateSquareBytes + 8 < rectlen ) {
         char *bp = buf;
         // put out color palette
         *bp++ = ncolors >> 24;
@@ -649,25 +660,47 @@ static int encodeTila(const unsigned *img, int itemsPerLine,
         *bp++ = ncolors;
         memcpy(bp, colors, ncolors * sizeof(int));
         bp += ncolors * sizeof(int);
+        *bp++ = squareCount >> 24;
+        *bp++ = squareCount >> 16;
+        *bp++ = squareCount >> 8;
+        *bp++ = squareCount;
 
-        struct BitPacker bitPacker;
-        bitPacker.bp = bp;
-        bitPacker.byte = 0;
-        bitPacker.bits = 0;
-        bitPacker.avail = estimate - (bp - buf);
-        encodeSubTile(&bitPacker, tileSquares, levelCount-1, 0, 0,
-                rect->width, rect->height, colorBits, colors,
-                hasheads, hashnext);
-        bp = bitPacker.bp;
-        if( bitPacker.avail != (bitPacker.bits? 1 : 0) )
-            log_fatal("encodeTila: wrong estimation, avail=%d, bits=%d",
-                    bitPacker.avail, bitPacker.bits);
-        if( bitPacker.bits )
-            *bp++ = bitPacker.byte << (8 - bitPacker.bits);
-        encBytes = bp - buf;
+        struct EncSubTileParam estp;
+        estp.bpColors.bp = bp;
+        estp.bpColors.byte = 0;
+        estp.bpColors.bits = 0;
+        estp.bpColors.avail = (squareCount * colorBits + 7) / 8;
+        estp.bpSquares.bp = bp + estp.bpColors.avail;
+        estp.bpSquares.byte = 0;
+        estp.bpSquares.bits = 0;
+        estp.bpSquares.avail = estimateSquareBytes;
+        estp.rectWidth = rect->width;
+        estp.rectHeight = rect->height;
+        estp.colors = colors;
+        estp.hasheads = hasheads;
+        estp.hashnext = hashnext;
+        estp.colorBits = colorBits;
+        estp.tileSquares = tileSquares;
+        encodeSubTile(&estp, levelCount-1, 0, 0);
+
+        if( estp.bpColors.avail != (estp.bpColors.bits? 1 : 0) )
+            log_fatal("encodeTila: wrong colors estimation, avail=%d, bits=%d",
+                    estp.bpColors.avail, estp.bpColors.bits);
+        if( estp.bpColors.bits )
+            *estp.bpColors.bp++ = estp.bpColors.byte << (8-estp.bpColors.bits);
+
+        if( estp.bpSquares.avail != (estp.bpSquares.bits? 1 : 0) )
+            log_fatal("encodeTila: wrong squares estimation, avail=%d, bits=%d",
+                    estp.bpSquares.avail, estp.bpSquares.bits);
+        if( estp.bpSquares.bits )
+            *estp.bpSquares.bp++
+                = estp.bpSquares.byte << (8 - estp.bpSquares.bits);
+        encBytes = estp.bpSquares.bp - buf;
     }else{
-        log_info("\n@@@ encodeTila: estimated size greater than buffer size,"
-               " estimated=%d, rectlen=%d\n@@@", estimate, rectlen);
+        log_debug("encodeTila: estimated size greater than buffer size,"
+               " estimated color bytes=%d, square bytes=%d, total=%d, "
+               "rectlen=%d", estimateColorBytes, estimateSquareBytes,
+               estimateColorBytes + estimateSquareBytes + 8, rectlen);
     }
     free(colors);
     free(hashnext);

@@ -329,7 +329,8 @@ static unsigned getBits(struct BitUnpacker *bp, unsigned dataBitCount)
     return res;
 }
 
-static void decodeSubTile(struct BitUnpacker *bitUnpacker,
+static void decodeSubTile(struct BitUnpacker *bpColors,
+        struct BitUnpacker *bpSquares,
         int lvl, int x, int y, int rectWidth, int rectHeight,
         unsigned *colors, unsigned colorBits,
         unsigned *img, int itemsPerLine)
@@ -339,7 +340,7 @@ static void decodeSubTile(struct BitUnpacker *bitUnpacker,
     if( lvl == 0 ) {
         isSplit = 0;
     }else{
-        isSplit = getBits(bitUnpacker, 1);
+        isSplit = getBits(bpSquares, 1);
     }
     if( isSplit ) {
         int psubWidth = 1 << (lvl-1);
@@ -351,15 +352,15 @@ static void decodeSubTile(struct BitUnpacker *bitUnpacker,
                 for(int sx = 0; sx < 2; ++sx) {
                     int px = 2 * x + sx;
                     if( px < phcount ) {
-                        decodeSubTile(bitUnpacker, lvl-1, px, py, rectWidth,
-                                rectHeight, colors, colorBits, img,
+                        decodeSubTile(bpColors, bpSquares, lvl-1, px, py,
+                                rectWidth, rectHeight, colors, colorBits, img,
                                 itemsPerLine);
                     }
                 }
             }
         }
     }else{
-        unsigned color = getBits(bitUnpacker, colorBits);
+        unsigned color = getBits(bpColors, colorBits);
         //printf("   decodeSubTile: lvl=%d, x=%d, y=%d color=%d\n",
         //            lvl, x, y, colorIdx);
         if( colors != NULL )
@@ -380,7 +381,7 @@ static void decodeTila(const void *data, int datalen, unsigned *img,
         int x, int y, int width, int height, int itemsPerLine)
 {
     const unsigned char *bp = data;
-    unsigned *colors, ncolors, colorBits;
+    unsigned *colors, ncolors, colorBits, squareCount;
 
     ncolors = *bp++ << 24;
     ncolors |= *bp++ << 16;
@@ -390,9 +391,13 @@ static void decodeTila(const void *data, int datalen, unsigned *img,
         colors = malloc(ncolors * sizeof(int));
         memcpy(colors, bp, ncolors * sizeof(int));
         bp += ncolors * sizeof(int);
-        colorBits = 0;
-        while( ncolors > 1 << colorBits )
-            ++colorBits;
+        if( ncolors <= 1 )
+            colorBits = 0;
+        else{
+            colorBits = 1;
+            while( colorBits < 32 && ncolors > 1 << colorBits )
+                colorBits *= 2;
+        }
     }else{
         colors = NULL;
         colorBits = sizeof(int) * 8;
@@ -403,16 +408,25 @@ static void decodeTila(const void *data, int datalen, unsigned *img,
         tileWidth *= 2;
         ++levelCount;
     }
-    struct BitUnpacker bitUnpacker;
-    bitUnpacker.bp = bp;
-    bitUnpacker.byte = 0;
-    bitUnpacker.bits = 0;
-    bitUnpacker.avail = datalen - (bp - (const unsigned char*)data);
-    decodeSubTile(&bitUnpacker, levelCount-1, 0, 0, width, height, colors,
-            colorBits, img + y * itemsPerLine + x, itemsPerLine);
-    if( bitUnpacker.avail != 0 )
-        log_fatal("decodeTila: unexpected extra bytes count=%d",
-                bitUnpacker.avail);
+    squareCount = *bp++ << 24;
+    squareCount |= *bp++ << 16;
+    squareCount |= *bp++ << 8;
+    squareCount |= *bp++;
+    struct BitUnpacker bpColors, bpSquares;
+    bpColors.bp = bp;
+    bpColors.byte = 0;
+    bpColors.bits = 0;
+    bpColors.avail = (squareCount * colorBits + 7) / 8;
+    bpSquares.bp = bp + bpColors.avail;
+    bpSquares.byte = 0;
+    bpSquares.bits = 0;
+    bpSquares.avail = datalen - (bp - (const unsigned char*)data)
+        - bpColors.avail;
+    decodeSubTile(&bpColors, &bpSquares, levelCount-1, 0, 0, width, height,
+            colors, colorBits, img + y * itemsPerLine + x, itemsPerLine);
+    if( bpColors.avail != 0 )
+        log_fatal("decodeTila: unexpected extra color bytes count=%d",
+                bpColors.avail);
     free(colors);
 }
 
