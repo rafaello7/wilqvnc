@@ -414,6 +414,268 @@ static int encodeDiff(const unsigned *prevImg, const unsigned *curImg,
     return srclen * sizeof(int);
 }
 
+struct BitPacker {
+    char *bp;
+    char byte;
+    unsigned bits;
+    unsigned avail;
+};
+
+static void pushBits(struct BitPacker *bp, unsigned data,
+        unsigned dataBitCount)
+{
+    while( dataBitCount ) {
+        unsigned bitCount = 8 - bp->bits;
+        if( bitCount > dataBitCount )
+            bitCount = dataBitCount;
+        unsigned dataBits =  (data >> (dataBitCount - bitCount))
+            & ((1 << bitCount) - 1);
+        bp->byte = bp->byte << bitCount | dataBits;
+        bp->bits += bitCount;
+        dataBitCount -= bitCount;
+        if( bp->bits == 8 ) {
+            if( bp->avail == 0 )
+                log_fatal("pushBits: buffer full");
+            *bp->bp++ = bp->byte;
+            bp->bits = 0;
+            --bp->avail;
+        }
+    }
+}
+
+struct Tile {
+    int squareCount;
+    int squareBits;
+    int color;
+};
+
+static void encodeSubTile(struct BitPacker *bitPacker,
+        struct Tile **tileSquares,
+        int lvl, int x, int y, int rectWidth, int rectHeight,
+        unsigned colorBits, unsigned *colors, int *hasheads, int *hashnext)
+{
+    if( lvl == 0 ) {
+        unsigned color = tileSquares[0][y * rectWidth + x].color;
+        if( colors != NULL ) {
+            unsigned hash = (color + (color >> 12)) & 0xfff;
+            int colorIdx = hasheads[hash] - 1;
+            while( colors[colorIdx] != color )
+                colorIdx = hashnext[colorIdx];
+            color = colorIdx;
+        }
+        pushBits(bitPacker, color, colorBits);
+        //log_info("encodeSubTile: lvl=%d, x=%d, y=%d, color=%d",
+        //        lvl, x, y, colorIdx);
+    }else{
+        int psubWidth = 1 << (lvl-1);
+        int phcount = (rectWidth + psubWidth - 1) / psubWidth;
+        int pvcount = (rectHeight + psubWidth - 1) / psubWidth;
+        int hcount = (phcount+1) / 2;
+        int squareCount = tileSquares[lvl][y * hcount + x].squareCount;
+
+        if( squareCount > 1 ) {
+            pushBits(bitPacker, 1, 1);
+            for(int sy = 0; sy < 2; ++sy) {
+                int py = 2 * y + sy;
+                if( py < pvcount ) {
+                    for(int sx = 0; sx < 2; ++sx) {
+                        int px = 2 * x + sx;
+                        if( px < phcount ) {
+                            encodeSubTile(bitPacker, tileSquares, lvl-1,
+                                px, py, rectWidth, rectHeight, colorBits,
+                                colors, hasheads, hashnext);
+                        }
+                    }
+                }
+            }
+        }else{
+            unsigned color = tileSquares[lvl][y * hcount + x].color;
+            if( colors != NULL ) {
+                unsigned hash = (color + (color >> 12)) & 0xfff;
+                int colorIdx = hasheads[hash] - 1;
+                while( colors[colorIdx] != color )
+                    colorIdx = hashnext[colorIdx];
+                color = colorIdx;
+            }
+            pushBits(bitPacker, 0, 1);
+            pushBits(bitPacker, color, colorBits);
+            //log_info("encodeSubTile: lvl=%d, x=%d, y=%d, color=%d",
+            //        lvl, x, y, colorIdx);
+        }
+    }
+}
+
+/* The idea: imagine a square having upper left corner at the upper left corner
+ * of rectangle to encode. The square covers whole rectangle to encode and
+ * the square side length is a power of two.  If the whole rectangle within
+ * square is covered with one color, put '0' bit in output and then put the
+ * square color in output. If not, put '1' bit in output, divide the square
+ * into four smaller ones and dispatch every smaller square recursively. It
+ * means, if the smaller square is covered with one color, put '0' bit and then
+ * the square color in output.  Otherwise put '1' bit and divide the square
+ * into four smaller ones.  And so forth.  The four smaller squares are
+ * dispatched in order: upper left, upper right, lower left, lower right.
+ * Sub-squares outside the encoded rectanlge are omitted. Sub-squares of size
+ * 1x1 pixel haven't the split bit.
+ *
+ * Colors are outputted in encoded form, as indexes in color palette, which is
+ * outputted before the encoded rectangle. The number of bits of outputted color
+ * index depends on number of colors used; it is as small as possible.  It
+ * means, if the whole rectangle to encode is covered with single color then no
+ * bit is used for index. When 2 colors are used - one bit is used. When 3 or 4
+ * - two bits are used. When 5 .. 8 - three bits. And so forth.
+ */
+static int encodeTila(const unsigned *img, int itemsPerLine,
+        const RectangleArea *rect, char *buf)
+{
+    int dataOff = rect->y * itemsPerLine + rect->x;
+    unsigned *colors = NULL, ncolors = 0, colorsAlloc = 0;
+    int hasheads[4096], *hashnext = NULL, k;
+    int tileWidth = 1;
+    int rectlen = rect->width * rect->height * sizeof(int);
+
+    while( tileWidth < rect->width || tileWidth < rect->height )
+        tileWidth *= 2;
+    // calculate number of colors
+    memset(hasheads, 0, sizeof(hasheads));
+    for(int i = 0; i < rect->height; ++i) {
+        for(int j = 0; j < rect->width; ++j) {
+            unsigned color = img[dataOff + j] & 0xffffff;
+            unsigned hash = (color + (color >> 12)) & 0xfff;
+            if( ncolors == colorsAlloc ) {
+                colorsAlloc += 4096;
+                colors = realloc(colors, colorsAlloc * sizeof(int));
+                hashnext = realloc(hashnext, colorsAlloc * sizeof(int));
+            }
+            if( hasheads[hash] == 0 ) {
+                hasheads[hash] = ncolors + 1;
+                hashnext[ncolors] = -1;
+                colors[ncolors] = color;
+                ++ncolors;
+            }else{
+                k = hasheads[hash] - 1;
+                while( colors[k] != color && hashnext[k] != -1 )
+                    k = hashnext[k];
+                if( colors[k] != color ) {
+                    hashnext[k] = ncolors;
+                    hashnext[ncolors] = -1;
+                    colors[ncolors] = color;
+                    ++ncolors;
+                }
+            }
+        }
+        dataOff += itemsPerLine;
+    }
+    struct Tile *tileSquares[15];
+    int levelCount = 0;
+    while( tileWidth >= (1 << levelCount) ) {
+        int subWidth = 1 << levelCount;
+        int hcount = (rect->width + subWidth - 1) / subWidth;
+        int vcount = (rect->height + subWidth - 1) / subWidth;
+        tileSquares[levelCount] = malloc(hcount * vcount * sizeof(struct Tile));
+        ++levelCount;
+    }
+    dataOff = rect->y * itemsPerLine + rect->x;
+    for(int i = 0; i < rect->height; ++i) {
+        for(int j = 0; j < rect->width; ++j) {
+            unsigned curPixel = img[dataOff + j] & 0xffffff;
+            tileSquares[0][i * rect->width + j].squareCount = 1;
+            tileSquares[0][i * rect->width + j].squareBits = 0;
+            tileSquares[0][i * rect->width + j].color = curPixel;
+        }
+        dataOff += itemsPerLine;
+    }
+    for(int lvl = 1; lvl < levelCount; ++lvl) {
+        int psubWidth = 1 << (lvl-1);
+        int phcount = (rect->width + psubWidth - 1) / psubWidth;
+        int pvcount = (rect->height + psubWidth - 1) / psubWidth;
+        int hcount = (phcount+1) / 2, vcount = (pvcount+1) / 2;
+        for(int i = 0; i < vcount; ++i) {
+            for(int j = 0; j < hcount; ++j) {
+                unsigned color =
+                    tileSquares[lvl-1][2*i * phcount + 2*j].color;
+                int squareCount = 0, isMultiColor = 0, squareBits = 1;
+                for(int si = 0; si < 2; ++si) {
+                    for(int sj = 0; sj < 2; ++sj) {
+                        if( 2*i + si < pvcount && 2*j + sj < phcount ) {
+                            int squareCount2 = tileSquares[lvl-1]
+                                [(2*i+si) * phcount + 2*j + sj].squareCount;
+                            int squareBits2 = tileSquares[lvl-1]
+                                [(2*i+si) * phcount + 2*j + sj].squareBits;
+                            unsigned color2 = tileSquares[lvl-1]
+                                [(2*i+si) * phcount + 2*j + sj].color;
+                            squareCount += squareCount2;
+                            squareBits  += squareBits2;
+                            if( squareCount2 > 1 || color2 != color )
+                                isMultiColor = 1;
+                        }
+                    }
+                }
+                tileSquares[lvl][i * hcount + j].squareCount
+                    = isMultiColor ? squareCount : 1;
+                tileSquares[lvl][i * hcount + j].squareBits
+                    = isMultiColor ? squareBits : 1;
+                tileSquares[lvl][i * hcount + j].color = color;
+            }
+        }
+    }
+    int colorBits = 0;
+    while( ncolors > 1 << colorBits )
+        ++colorBits;
+    int squareCount = tileSquares[levelCount-1][0].squareCount;
+    int squareBits = tileSquares[levelCount-1][0].squareBits;
+    int estimateWithPalette = 4 + ncolors * sizeof(int) +
+            (squareCount * colorBits + squareBits + 7) / 8;
+    int estimateNoPalette = 4 + squareCount * sizeof(int)
+        + (squareBits + 7) / 8;
+    int estimate;
+    if( estimateWithPalette >= estimateNoPalette ) {
+        ncolors = 0;
+        colorBits = 32;
+        estimate = estimateNoPalette;
+        free(colors);
+        colors = NULL;
+        free(hashnext);
+        hashnext = NULL;
+    }else
+        estimate = estimateWithPalette;
+    int encBytes = -1;
+    if( estimate < rectlen ) {
+        char *bp = buf;
+        // put out color palette
+        *bp++ = ncolors >> 24;
+        *bp++ = ncolors >> 16;
+        *bp++ = ncolors >> 8;
+        *bp++ = ncolors;
+        memcpy(bp, colors, ncolors * sizeof(int));
+        bp += ncolors * sizeof(int);
+
+        struct BitPacker bitPacker;
+        bitPacker.bp = bp;
+        bitPacker.byte = 0;
+        bitPacker.bits = 0;
+        bitPacker.avail = estimate - (bp - buf);
+        encodeSubTile(&bitPacker, tileSquares, levelCount-1, 0, 0,
+                rect->width, rect->height, colorBits, colors,
+                hasheads, hashnext);
+        bp = bitPacker.bp;
+        if( bitPacker.avail != (bitPacker.bits? 1 : 0) )
+            log_fatal("encodeTila: wrong estimation, avail=%d, bits=%d",
+                    bitPacker.avail, bitPacker.bits);
+        if( bitPacker.bits )
+            *bp++ = bitPacker.byte << (8 - bitPacker.bits);
+        encBytes = bp - buf;
+    }else{
+        log_info("\n@@@ encodeTila: estimated size greater than buffer size,"
+               " estimated=%d, rectlen=%d\n@@@", estimate, rectlen);
+    }
+    free(colors);
+    free(hashnext);
+    for(int lvl = 0; lvl < levelCount; ++lvl)
+        free(tileSquares[lvl]);
+    return encBytes;
+}
+
 void srvconn_sendRectEncoded(SockStream *strm, const char *prevImg,
         const char *curImg, int bytesPerPixel, int bytesPerLine,
         const RectangleArea *rect)
@@ -427,7 +689,7 @@ void srvconn_sendRectEncoded(SockStream *strm, const char *prevImg,
             bytesPerPixel != sizeof(int) || bytesPerLine % sizeof(int) != 0 )
         encType = ENC_NONE;
     if( encType != ENC_NONE || compr != COMPR_NONE ) {
-        int srclen, complen;
+        int srclen = -1, complen;
         char *bufsrc, *bufdest;
         const char *compressed;
         unsigned long long tmBeg = curTimeMs();
@@ -443,20 +705,25 @@ void srvconn_sendRectEncoded(SockStream *strm, const char *prevImg,
             srclen = encodeTRLE((const unsigned*)curImg,
                     bytesPerLine / sizeof(int), rect, 64, bufsrc);
             break;
-        default:
-            {
-                int dataOff = rect->y * bytesPerLine + rect->x * bytesPerPixel;
-                int linelen = rect->width * bytesPerPixel;
-                srclen = rectlen;
-                int srcOff = 0;
-
-                for(int i = 0; i < rect->height; ++i) {
-                    memcpy(bufsrc + srcOff, curImg + dataOff, linelen);
-                    dataOff += bytesPerLine;
-                    srcOff += linelen;
-                }
-            }
+        case ENC_TILA:
+            srclen = encodeTila((const unsigned*)curImg,
+                    bytesPerLine / sizeof(int), rect, bufsrc);
             break;
+        case ENC_NONE:
+            break;
+        }
+        if( srclen < 0 ) {
+            int dataOff = rect->y * bytesPerLine + rect->x * bytesPerPixel;
+            int linelen = rect->width * bytesPerPixel;
+            srclen = rectlen;
+            int srcOff = 0;
+
+            for(int i = 0; i < rect->height; ++i) {
+                memcpy(bufsrc + srcOff, curImg + dataOff, linelen);
+                dataOff += bytesPerLine;
+                srcOff += linelen;
+            }
+            encType = ENC_NONE;
         }
         switch( compr ) {
         case COMPR_LZ4:
@@ -489,8 +756,9 @@ void srvconn_sendRectEncoded(SockStream *strm, const char *prevImg,
             compr = COMPR_NONE;
         }
         unsigned long long tmCur = curTimeMs();
-        log_info("%7d -> %7d -> %7d, %3d%%  %3llu ms", rectlen, srclen,
-                complen, 100 * complen / rectlen, tmCur - tmBeg);
+        if( rect->width > 25 || rect->height > 25 )
+            log_info("%7d -> %7d -> %7d, %3d%%  %3llu ms", rectlen, srclen,
+                    complen, 100 * complen / rectlen, tmCur - tmBeg);
         sock_writeU32(strm, 0x514c4957);
         sock_writeU16(strm, encType);
         sock_writeU16(strm, compr);

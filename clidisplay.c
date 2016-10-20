@@ -299,6 +299,123 @@ void clidisp_putRectFromSocket(DisplayConnection *conn, SockStream *strm,
             bytesPerLine, width * bytespp, height);
 }
 
+struct BitUnpacker {
+    const unsigned char *bp;
+    char byte;
+    unsigned bits;
+    unsigned avail;
+};
+
+static unsigned getBits(struct BitUnpacker *bp, unsigned dataBitCount)
+{
+    unsigned res = 0, bitsRemain = dataBitCount;
+    while( bitsRemain ) {
+        if( bp->bits == 0 ) {
+            if( bp->avail == 0 )
+                log_fatal("getBits: buffer empty");
+            bp->byte = *bp->bp++;
+            bp->bits = 8;
+            --bp->avail;
+        }
+        unsigned bitCount = bp->bits;
+        if( bitCount > bitsRemain )
+            bitCount = bitsRemain;
+        unsigned dataBits =  (bp->byte >> (bp->bits - bitCount))
+            & ((1 << bitCount) - 1);
+        res = res << bitCount | dataBits;
+        bp->bits -= bitCount;
+        bitsRemain -= bitCount;
+    }
+    return res;
+}
+
+static void decodeSubTile(struct BitUnpacker *bitUnpacker,
+        int lvl, int x, int y, int rectWidth, int rectHeight,
+        unsigned *colors, unsigned colorBits,
+        unsigned *img, int itemsPerLine)
+{
+    int isSplit;
+
+    if( lvl == 0 ) {
+        isSplit = 0;
+    }else{
+        isSplit = getBits(bitUnpacker, 1);
+    }
+    if( isSplit ) {
+        int psubWidth = 1 << (lvl-1);
+        int phcount = (rectWidth + psubWidth - 1) / psubWidth;
+        int pvcount = (rectHeight + psubWidth - 1) / psubWidth;
+        for(int sy = 0; sy < 2; ++sy) {
+            int py = 2 * y + sy;
+            if( py < pvcount ) {
+                for(int sx = 0; sx < 2; ++sx) {
+                    int px = 2 * x + sx;
+                    if( px < phcount ) {
+                        decodeSubTile(bitUnpacker, lvl-1, px, py, rectWidth,
+                                rectHeight, colors, colorBits, img,
+                                itemsPerLine);
+                    }
+                }
+            }
+        }
+    }else{
+        unsigned color = getBits(bitUnpacker, colorBits);
+        //printf("   decodeSubTile: lvl=%d, x=%d, y=%d color=%d\n",
+        //            lvl, x, y, colorIdx);
+        if( colors != NULL )
+            color = colors[color];
+        int subWidth = 1 << lvl;
+        for(int sy = y * subWidth; sy < (y+1) * subWidth && sy < rectHeight;
+                ++sy)
+        {
+            unsigned *imgRow = img + sy * itemsPerLine;
+            for(int sx = x * subWidth; sx < (x+1) * subWidth && sx < rectWidth;
+                    ++sx)
+                imgRow[sx] = color;
+        }
+    }
+}
+
+static void decodeTila(const void *data, int datalen, unsigned *img,
+        int x, int y, int width, int height, int itemsPerLine)
+{
+    const unsigned char *bp = data;
+    unsigned *colors, ncolors, colorBits;
+
+    ncolors = *bp++ << 24;
+    ncolors |= *bp++ << 16;
+    ncolors |= *bp++ << 8;
+    ncolors |= *bp++;
+    if( ncolors > 0 ) {
+        colors = malloc(ncolors * sizeof(int));
+        memcpy(colors, bp, ncolors * sizeof(int));
+        bp += ncolors * sizeof(int);
+        colorBits = 0;
+        while( ncolors > 1 << colorBits )
+            ++colorBits;
+    }else{
+        colors = NULL;
+        colorBits = sizeof(int) * 8;
+    }
+    int tileWidth = 1;
+    int levelCount = 1;
+    while( tileWidth < width || tileWidth < height ) {
+        tileWidth *= 2;
+        ++levelCount;
+    }
+    struct BitUnpacker bitUnpacker;
+    bitUnpacker.bp = bp;
+    bitUnpacker.byte = 0;
+    bitUnpacker.bits = 0;
+    bitUnpacker.avail = datalen - (bp - (const unsigned char*)data);
+    decodeSubTile(&bitUnpacker, levelCount-1, 0, 0, width, height, colors,
+            colorBits, img + y * itemsPerLine + x, itemsPerLine);
+    if( bitUnpacker.avail != 0 )
+        log_fatal("decodeTila: unexpected extra bytes count=%d",
+                bitUnpacker.avail);
+    free(colors);
+}
+
 void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
         int x, int y, int width, int height)
 {
@@ -367,6 +484,11 @@ void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
                         "nitems=%d", width, height, row, col, nitems);
     }else if( encMethod == ENC_TRLE ) {
         clidisp_decodeTRLE(conn, uncompressed, srclen, x, y, width, height, 64);
+    }else if( encMethod == ENC_TILA ) {
+        int itemsPerLine = bytesPerLine / bytespp;
+
+        decodeTila(uncompressed, srclen, (unsigned*)conn->img->data,
+                x, y, width, height, itemsPerLine);
     }else if( encMethod == ENC_NONE ) {
         int srcOff = 0;
         int srcLineBytes = width * bytespp;

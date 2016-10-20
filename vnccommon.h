@@ -16,7 +16,8 @@ typedef enum {
 typedef enum {
     ENC_NONE,
     ENC_DIFF,
-    ENC_TRLE
+    ENC_TRLE,
+    ENC_TILA
 } EncodingType;
 
 typedef struct {

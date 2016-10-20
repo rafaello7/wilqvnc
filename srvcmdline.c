@@ -29,7 +29,7 @@ static const char *usage(const char *progname, char *buf, int buflen)
         "  -zs|-zstd           <level> - set compression level on zstd\n"
         "  -lz|-lz4            <level> - set compression level on lz4\n"
         "  -e |-enc         <encoding> - encoding to use\n"
-        "                                one of: diff, trle, none\n"
+        "                                one of: diff, trle, tila, none\n"
         "  -c |-compr    <compression> - compression to use\n"
         "                                one of: zstd, lz4, none\n"
         "  -p |-passwd         <fname> - password file for authentication\n"
@@ -83,7 +83,7 @@ const char *cmdline_parse(int argc, char *argv[])
                 gParams.encType = ENC_DIFF;
                 break;
             case 't':
-                gParams.encType = ENC_TRLE;
+                gParams.encType = argv[i][1] == 'i' ? ENC_TILA : ENC_TRLE;
                 break;
             case 'n':
                 gParams.encType = ENC_NONE;
@@ -196,16 +196,17 @@ void cmdline_recvCtlMsg(void)
     }
     if( err == NULL ) {
         sprintf(buf,
-                "    zstd compression level (-zs):         %d\n"
-                "    lz4  compression level (-lz):         %d\n"
-                "    encoding used (-e diff/trle/none):    %s\n"
-                "    compression used (-c zstd/lz4/none):  %s\n"
-                "    discover movement by mouse (-[no]mm): %s\n"
-                "    discover vertical movement (-[no]vm): %s\n"
-                "    log level (-v/-q):                    %d\n",
+                "    zstd compression level (-zs):              %d\n"
+                "    lz4  compression level (-lz):              %d\n"
+                "    encoding used (-e diff/trle/tila/none):    %s\n"
+                "    compression used (-c zstd/lz4/none):       %s\n"
+                "    discover movement by mouse (-[no]mm):      %s\n"
+                "    discover vertical movement (-[no]vm):      %s\n"
+                "    log level (-v/-q):                         %d\n",
                 gParams.zstdLevel, gParams.lz4Level,
                 gParams.encType == ENC_DIFF ? "diff" :
                 gParams.encType == ENC_TRLE ? "trle" :
+                gParams.encType == ENC_TILA ? "tila" :
                 gParams.encType == ENC_NONE ? "none" : "unknown",
                 gParams.compr == COMPR_ZSTD ? "zstd" :
                 gParams.compr == COMPR_LZ4  ? "lz4" :
