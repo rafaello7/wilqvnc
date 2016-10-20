@@ -10,7 +10,8 @@ typedef enum {
 typedef enum {
     COMPR_NONE,
     COMPR_LZ4,
-    COMPR_ZSTD
+    COMPR_ZSTD,
+    COMPR_ZLIB
 } CompressionType;
 
 typedef enum {

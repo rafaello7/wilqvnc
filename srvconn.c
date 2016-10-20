@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <rpc/des_crypt.h>
 #include <sys/time.h>
+#include <time.h>
 #include <lz4.h>
 #include <zstd.h>
 #include <zlib.h>
@@ -184,6 +185,32 @@ static unsigned long long curTimeMs(void)
     struct timeval tv;
     gettimeofday(&tv, NULL);
     return tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
+}
+
+// TODO: remove <time.h> header on remove the dump below
+void dumpToFile(const unsigned *img, int itemsPerLine,
+                const RectangleArea *rect, int encBytes)
+{
+    char fname[200];
+    struct timeval tv;
+    struct tm *tmp;
+
+    if( rect->width < 25 && rect->height < 25 )
+        return;
+    gettimeofday(&tv, NULL);
+    tmp = localtime(&tv.tv_sec);
+    sprintf(fname, "/tmp/dmp%02d%02d_%02d%02d%02d_%06ld_%dx%d_%d.img",
+            tmp->tm_mon+1, tmp->tm_mday, tmp->tm_hour, tmp->tm_min,
+            tmp->tm_sec, tv.tv_usec, rect->width, rect->height, encBytes);
+    FILE *fp = fopen(fname, "w");
+    if( fp == NULL )
+        log_error_errno("unable to open %s", fname);
+    for(int i = 0; i < rect->height; ++i) {
+        if( fwrite(img + itemsPerLine * (i+rect->y) + rect->x,
+                    rect->width * sizeof(int), 1, fp) != 1 )
+            log_error_errno("write error %s", fname);
+    }
+    fclose(fp);
 }
 
 static int encodeTRLE(const unsigned *img, int itemsPerLine,
@@ -764,19 +791,23 @@ void srvconn_sendRectEncoded(SockStream *strm, const char *prevImg,
             compressed = bufdest = malloc(complen);
             complen = LZ4_compress_fast(bufsrc, bufdest, srclen, complen,
                     params->lz4Level);
-            if( srclen == 8 && complen == 8 ) {
-                printf("src=");
-                for(int i = 0; i < srclen; ++i) {
-                    printf(" %d", (unsigned char)bufsrc[i]);
-                }
-                printf("\n");
-            }
             break;
         case COMPR_ZSTD:
             complen = ZSTD_compressBound(srclen);
             compressed = bufdest = malloc(complen);
             complen = ZSTD_compress(bufdest, complen, bufsrc, srclen, 
                     params->zstdLevel);
+            break;
+        case COMPR_ZLIB:
+            {
+                complen = compressBound(srclen);
+                compressed = bufdest = malloc(complen);
+                uLongf dlen = complen;
+                if( compress2((Bytef*)bufdest, &dlen, (Bytef*)bufsrc,
+                            srclen, params->zlibLevel) != Z_OK )
+                    log_fatal("compress2 fail");
+                complen = dlen;
+            }
             break;
         default:
             bufdest = NULL;

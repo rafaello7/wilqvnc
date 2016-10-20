@@ -9,6 +9,7 @@
 #include <sys/select.h>
 #include <lz4.h>
 #include <zstd.h>
+#include <zlib.h>
 #include "clidisplay.h"
 #include "vnclog.h"
 
@@ -468,6 +469,17 @@ void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
                 log_fatal("ZSTD_decompress: complen=%d, srclen=%d, res=%d, %s",
                         complen, srclen, res, ZSTD_getErrorName(res));
             log_fatal("ZSTD_decompress: srclen=%d, res=%d", srclen, res);
+        }
+        break;
+    case COMPR_ZLIB:
+        {
+            uncompressed = malloc(srclen);
+            uLongf slen = srclen;
+            if( uncompress((Bytef*)uncompressed, &slen,
+                        (Bytef*)compressed, complen) != Z_OK )
+                log_fatal("uncompress error");
+            if( slen != srclen )
+                log_fatal("uncompress size mismatch");
         }
         break;
     default:

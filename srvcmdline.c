@@ -12,6 +12,7 @@
 static CmdLineParams gParams = {
     .zstdLevel = 3,
     .lz4Level  = 1,
+    .zlibLevel = 6,
     .compr     = COMPR_NONE
 };
 
@@ -28,10 +29,11 @@ static const char *usage(const char *progname, char *buf, int buflen)
         "parameters:\n"
         "  -zs|-zstd           <level> - set compression level on zstd\n"
         "  -lz|-lz4            <level> - set compression level on lz4\n"
+        "  -z                  <level> - set compression level on zlib\n"
         "  -e |-enc         <encoding> - encoding to use\n"
         "                                one of: diff, trle, tila, none\n"
         "  -c |-compr    <compression> - compression to use\n"
-        "                                one of: zstd, lz4, none\n"
+        "                                one of: zstd, lz4, zlib, none\n"
         "  -p |-passwd         <fname> - password file for authentication\n"
         "  -v |-verbose                - print some debug info\n"
         "  -q |-quiet                  - print less\n"
@@ -57,12 +59,16 @@ const char *cmdline_parse(int argc, char *argv[])
             if( i == argc - 1 )
                 goto noparam_err;
             gParams.lz4Level = atoi(argv[++i]);
+        }else if( !strcmp(argv[i], "-z") ) {
+            if( i == argc - 1 )
+                goto noparam_err;
+            gParams.zlibLevel = atoi(argv[++i]);
         }else if( !strcmp(argv[i], "-c") || !strcmp(argv[i], "-compr") ) {
             if( i == argc - 1 )
                 goto noparam_err;
             switch( argv[++i][0] ) {
             case 'z':
-                gParams.compr = COMPR_ZSTD;
+                gParams.compr = argv[i][1] == 'l' ? COMPR_ZLIB : COMPR_ZSTD;
                 break;
             case 'l':
                 gParams.compr = COMPR_LZ4;
@@ -198,18 +204,20 @@ void cmdline_recvCtlMsg(void)
         sprintf(buf,
                 "    zstd compression level (-zs):              %d\n"
                 "    lz4  compression level (-lz):              %d\n"
+                "    zlib compression level (-z):               %d\n"
                 "    encoding used (-e diff/trle/tila/none):    %s\n"
-                "    compression used (-c zstd/lz4/none):       %s\n"
+                "    compression used (-c zstd/lz4/zlib/none):  %s\n"
                 "    discover movement by mouse (-[no]mm):      %s\n"
                 "    discover vertical movement (-[no]vm):      %s\n"
                 "    log level (-v/-q):                         %d\n",
-                gParams.zstdLevel, gParams.lz4Level,
+                gParams.zstdLevel, gParams.lz4Level, gParams.zlibLevel,
                 gParams.encType == ENC_DIFF ? "diff" :
                 gParams.encType == ENC_TRLE ? "trle" :
                 gParams.encType == ENC_TILA ? "tila" :
                 gParams.encType == ENC_NONE ? "none" : "unknown",
                 gParams.compr == COMPR_ZSTD ? "zstd" :
                 gParams.compr == COMPR_LZ4  ? "lz4" :
+                gParams.compr == COMPR_ZLIB ? "zlib" :
                 gParams.compr == COMPR_NONE ? "none" : "unknown",
                 boolStr[gParams.discoverMouseMovement],
                 boolStr[gParams.discoverVerticalMovement],

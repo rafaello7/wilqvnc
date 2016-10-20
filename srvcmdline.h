@@ -6,6 +6,7 @@
 typedef struct {
     int zstdLevel;
     int lz4Level;
+    int zlibLevel;
     CompressionType compr;
     EncodingType encType;
     const char *passwdFile;
