@@ -9,6 +9,7 @@
 #include <lz4.h>
 #include <zstd.h>
 #include <zlib.h>
+#include <bzlib.h>
 #include "srvcmdline.h"
 #include "vnclog.h"
 
@@ -188,14 +189,14 @@ static unsigned long long curTimeMs(void)
 }
 
 // TODO: remove <time.h> header on remove the dump below
-void dumpToFile(const unsigned *img, int itemsPerLine,
+void dumpToFile(const char *img, int bytesPerLine, int bytesPerPixel,
                 const RectangleArea *rect, int encBytes)
 {
     char fname[200];
     struct timeval tv;
     struct tm *tmp;
 
-    if( rect->width < 25 && rect->height < 25 )
+    if( rect->width < 25 || rect->height < 25 )
         return;
     gettimeofday(&tv, NULL);
     tmp = localtime(&tv.tv_sec);
@@ -206,33 +207,35 @@ void dumpToFile(const unsigned *img, int itemsPerLine,
     if( fp == NULL )
         log_error_errno("unable to open %s", fname);
     for(int i = 0; i < rect->height; ++i) {
-        if( fwrite(img + itemsPerLine * (i+rect->y) + rect->x,
-                    rect->width * sizeof(int), 1, fp) != 1 )
+        if( fwrite(img + bytesPerLine * (i+rect->y) + rect->x * bytesPerPixel,
+                    rect->width * bytesPerPixel, 1, fp) != 1 )
             log_error_errno("write error %s", fname);
     }
     fclose(fp);
+    log_info("dumped to file %s", fname);
 }
 
 static int encodeTRLE(const unsigned *img, int itemsPerLine,
-        const RectangleArea *rect, unsigned squareWidth, char *buf)
+        const RectangleArea *rect, unsigned tileWidth, unsigned tileHeight,
+        char *buf)
 {
     char *bp = buf;
     int x, y, i, j, k;
     unsigned imgOff = rect->y * itemsPerLine + rect->x;
 
-    for(y = 0; y < rect->height; y += squareWidth) {
-        unsigned tileHeight = rect->height - y > squareWidth ? squareWidth :
+    for(y = 0; y < rect->height; y += tileHeight) {
+        unsigned curTileHeight = rect->height - y > tileHeight ? tileHeight :
             rect->height - y;
-        for(x = 0; x < rect->width; x += squareWidth) {
-            unsigned tileWidth = rect->width - x > squareWidth ? squareWidth :
-                rect->width - x;
+        for(x = 0; x < rect->width; x += tileWidth) {
+            unsigned curTileWidth = rect->width - x > tileWidth ?
+                tileWidth : rect->width - x;
             unsigned tileOff = imgOff + x;
             unsigned colors[128], ncolors = 0;
             int hasheads[256], hashnext[128];
 
             memset(hasheads, 0, sizeof(hasheads));
-            for(i = 0; i < tileHeight && ncolors < 128; ++i) {
-                for(j = 0; j < tileWidth && ncolors < 128; ++j) {
+            for(i = 0; i < curTileHeight && ncolors < 128; ++i) {
+                for(j = 0; j < curTileWidth && ncolors < 128; ++j) {
                     unsigned color = img[tileOff + j] & 0xffffff;
                     unsigned hash = (color + (color >> 8) + (color >> 16))
                         & 0xff;
@@ -273,9 +276,9 @@ static int encodeTRLE(const unsigned *img, int itemsPerLine,
                         }else
                             shift = 4;
                         tileOff = imgOff + x;
-                        for(i = 0; i < tileHeight; ++i) {
+                        for(i = 0; i < curTileHeight; ++i) {
                             unsigned b = 0, bcount = 0;
-                            for(j = 0; j < tileWidth; ++j) {
+                            for(j = 0; j < curTileWidth; ++j) {
                                 unsigned color = img[tileOff + j] & 0xffffff;
                                 unsigned hash = (color + (color >> 8) +
                                         (color >> 16)) & 0xff;
@@ -298,8 +301,8 @@ static int encodeTRLE(const unsigned *img, int itemsPerLine,
                     }else{
                         tileOff = imgOff + x;
                         unsigned curPixel, prevDist;
-                        for(i = 0; i < tileHeight; ++i) {
-                            for(int j = 0; j < tileWidth; ++j) {
+                        for(i = 0; i < curTileHeight; ++i) {
+                            for(int j = 0; j < curTileWidth; ++j) {
                                 unsigned color = img[tileOff + j] & 0xffffff;
                                 if( i == 0 && j == 0 ) {
                                     curPixel = color;
@@ -348,8 +351,8 @@ static int encodeTRLE(const unsigned *img, int itemsPerLine,
                 // raw encoding
                 *bp++ = 0;
                 tileOff = imgOff + x;
-                for(i = 0; i < tileHeight; ++i) {
-                    for(j = 0; j < tileWidth; ++j) {
+                for(i = 0; i < curTileHeight; ++i) {
+                    for(j = 0; j < curTileWidth; ++j) {
                         unsigned color = img[tileOff + j];
                         *bp++ = color;
                         *bp++ = color >> 8;
@@ -359,7 +362,7 @@ static int encodeTRLE(const unsigned *img, int itemsPerLine,
                 }
             }
         }
-        imgOff += squareWidth * itemsPerLine;
+        imgOff += tileHeight * itemsPerLine;
     }
     return bp - buf;
 }
@@ -386,7 +389,7 @@ void encodeZRLE(SockStream *strm, const char *curImg,
         isInitialized = 1;
     }
     srclen = encodeTRLE((const unsigned*)curImg, bytesPerLine / bytesPerPixel,
-            rect, 64, bufsrc);
+            rect, 64, 64, bufsrc);
     complen = deflateBound(&zstrm, srclen);
     bufdest = malloc(complen);
     zstrm.next_in = (Bytef*)bufsrc;
@@ -763,7 +766,7 @@ void srvconn_sendRectEncoded(SockStream *strm, const char *prevImg,
             break;
         case ENC_TRLE:
             srclen = encodeTRLE((const unsigned*)curImg,
-                    bytesPerLine / sizeof(int), rect, 64, bufsrc);
+                    bytesPerLine / sizeof(int), rect, 64, 64, bufsrc);
             break;
         case ENC_TILA:
             srclen = encodeTila((const unsigned*)curImg,
@@ -806,6 +809,17 @@ void srvconn_sendRectEncoded(SockStream *strm, const char *prevImg,
                 if( compress2((Bytef*)bufdest, &dlen, (Bytef*)bufsrc,
                             srclen, params->zlibLevel) != Z_OK )
                     log_fatal("compress2 fail");
+                complen = dlen;
+            }
+            break;
+        case COMPR_BZ2:
+            {
+                complen = (srclen * 101 + 100) / 100 + 600;
+                compressed = bufdest = malloc(complen);
+                unsigned dlen = complen;
+                if( BZ2_bzBuffToBuffCompress(bufdest, &dlen, bufsrc,
+                            srclen, 1, 0, 0) != BZ_OK )
+                    log_fatal("BZ2_bzBuffToBuffCompress fail");
                 complen = dlen;
             }
             break;

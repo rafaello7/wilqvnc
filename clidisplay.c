@@ -10,6 +10,7 @@
 #include <lz4.h>
 #include <zstd.h>
 #include <zlib.h>
+#include <bzlib.h>
 #include "clidisplay.h"
 #include "vnclog.h"
 
@@ -480,6 +481,17 @@ void clidisp_decodeWILQ(DisplayConnection *conn, SockStream *strm,
                 log_fatal("uncompress error");
             if( slen != srclen )
                 log_fatal("uncompress size mismatch");
+        }
+        break;
+    case COMPR_BZ2:
+        {
+            uncompressed = malloc(srclen);
+            unsigned slen = srclen;
+            if( BZ2_bzBuffToBuffDecompress(uncompressed, &slen,
+                        compressed, complen, 0, 0) != BZ_OK )
+                log_fatal("BZ2_bzBuffToBuffDecompress error");
+            if( slen != srclen )
+                log_fatal("BZ2_bzBuffToBuffDecompress size mismatch");
         }
         break;
     default:

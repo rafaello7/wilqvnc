@@ -8,11 +8,11 @@ CTL_OBJS = vnclog.o srvcmdline.o wilqvncctl.o
 all:: wilqvncsrv wilqvnc wilqvncctl
 
 wilqvnc: $(CLI_OBJS)
-	gcc $(CLI_OBJS) -o wilqvnc -lX11 -lXext -llz4 -lzstd -lz
+	gcc $(CLI_OBJS) -o wilqvnc -lX11 -lXext -llz4 -lzstd -lz -lbz2
 
 wilqvncsrv: $(SRV_OBJS)
 	gcc $(SRV_OBJS) -o wilqvncsrv -lX11 -lXdamage -lXext -lXtst -lXfixes \
-		-llz4 -lzstd -lz
+		-llz4 -lzstd -lz -lbz2
 
 wilqvncctl: $(CTL_OBJS)
 	gcc $(CTL_OBJS) -o wilqvncctl

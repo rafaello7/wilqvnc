@@ -33,7 +33,7 @@ static const char *usage(const char *progname, char *buf, int buflen)
         "  -e |-enc         <encoding> - encoding to use\n"
         "                                one of: diff, trle, tila, none\n"
         "  -c |-compr    <compression> - compression to use\n"
-        "                                one of: zstd, lz4, zlib, none\n"
+        "                                one of: zstd, lz4, zlib, bz2, none\n"
         "  -p |-passwd         <fname> - password file for authentication\n"
         "  -v |-verbose                - print some debug info\n"
         "  -q |-quiet                  - print less\n"
@@ -72,6 +72,9 @@ const char *cmdline_parse(int argc, char *argv[])
                 break;
             case 'l':
                 gParams.compr = COMPR_LZ4;
+                break;
+            case 'b':
+                gParams.compr = COMPR_BZ2;
                 break;
             case 'n':
                 gParams.compr = COMPR_NONE;
@@ -206,7 +209,7 @@ void cmdline_recvCtlMsg(void)
                 "    lz4  compression level (-lz):              %d\n"
                 "    zlib compression level (-z):               %d\n"
                 "    encoding used (-e diff/trle/tila/none):    %s\n"
-                "    compression used (-c zstd/lz4/zlib/none):  %s\n"
+                "    compression used (-c zstd/lz4/zlib/bz2/none): %s\n"
                 "    discover movement by mouse (-[no]mm):      %s\n"
                 "    discover vertical movement (-[no]vm):      %s\n"
                 "    log level (-v/-q):                         %d\n",
@@ -218,6 +221,7 @@ void cmdline_recvCtlMsg(void)
                 gParams.compr == COMPR_ZSTD ? "zstd" :
                 gParams.compr == COMPR_LZ4  ? "lz4" :
                 gParams.compr == COMPR_ZLIB ? "zlib" :
+                gParams.compr == COMPR_BZ2 ? "bz2" :
                 gParams.compr == COMPR_NONE ? "none" : "unknown",
                 boolStr[gParams.discoverMouseMovement],
                 boolStr[gParams.discoverVerticalMovement],
