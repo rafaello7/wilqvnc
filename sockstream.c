@@ -60,46 +60,6 @@ SockStream *sock_connectVNCHost(const char *hostVNC)
     return strm;
 }
 
-SockStream *sock_accept(int vncDisplay, int runOnce)
-{
-    int listenFd, sockFd, isOn = 1;
-    unsigned port = 5900 + vncDisplay;
-
-    if( (listenFd = socket(AF_INET, SOCK_STREAM, 0)) < 0 )
-        log_fatal_errno("socket");
-    if( setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, &isOn,
-                sizeof(isOn)) )
-        log_error_errno("set socket SO_REUSEADDR failed");
-    struct sockaddr_in sin;
-    sin.sin_family = AF_INET;
-    sin.sin_addr.s_addr = htonl(INADDR_ANY);
-    sin.sin_port = htons(port);
-    if( bind(listenFd, (struct sockaddr*)&sin, sizeof(sin)) < 0 )
-        log_fatal_errno("bind");
-    if( listen(listenFd, 5) < 0 )
-        log_fatal_errno("listen");
-    while( (sockFd = accept(listenFd, NULL, 0)) >= 0 ) {
-        switch( runOnce ? 0 : fork() ) {
-        case -1:
-            log_fatal_errno("fork");
-        case 0:
-            close(listenFd);
-            if( setsockopt(sockFd, IPPROTO_TCP, TCP_NODELAY, &isOn,
-                        sizeof(isOn)) )
-                log_error_errno("set socket TCP_NODELAY failed");
-            SockStream *strm = malloc(sizeof(SockStream));
-            strm->sockFd = sockFd;
-            strm->readOff = strm->readSize = strm->writeOff = 0;
-            return strm;
-        default:
-            close(sockFd);
-            break;
-        }
-    }
-    log_fatal_errno("accept");
-    return NULL;
-}
-
 void sock_read(SockStream *strm, void *buf, int toRead)
 {
     if( strm->readOff < strm->readSize ) {
@@ -292,63 +252,6 @@ void sock_writeU32(SockStream *strm, unsigned val)
     uint32_t u32 = htonl(val);
 
     sock_write(strm, &u32, 4);
-}
-
-void sock_writeRect(SockStream *strm, const char *buf, int bytesPerLine,
-        int width, int height)
-{
-    enum { IOV_SIZE = 128 };
-    struct iovec iov[IOV_SIZE];
-    int i;
-    int hbeg = height;
-    const char *bbeg = buf;
-
-    if( strm->writeOff + width * height <= sizeof(strm->writeBuf) ) {
-        for(i = 0; i < height; ++i) {
-            memcpy(strm->writeBuf + strm->writeOff, buf, width);
-            buf += bytesPerLine;
-            strm->writeOff += width;
-        }
-        return;
-    }
-    while( height > 0 ) {
-        int iovBeg = 0, iovEnd = 0;
-        if( strm->writeOff > 0 ) {
-            iov[iovEnd].iov_base = strm->writeBuf;
-            iov[iovEnd].iov_len = strm->writeOff;
-            strm->writeOff = 0;
-            ++iovEnd;
-        }
-        while( height > 0 && iovEnd < IOV_SIZE ) {
-            iov[iovEnd].iov_base = (void*)buf;
-            iov[iovEnd].iov_len = width;
-            buf = (const char*)buf + bytesPerLine;
-            ++iovEnd;
-            --height;
-        }
-        while( 1 ) {
-            int wr = writev(strm->sockFd, iov + iovBeg, iovEnd - iovBeg);
-            if( wr < 0 ) {
-                log_error_errno("writev error in sock_writeRect");
-                log_error("  buf=%p, bytesPerLine=%d, width=%d, height=%d",
-                        bbeg, bytesPerLine, width, hbeg);
-                log_error("  iovBeg=%d, iovEnd=%d", iovBeg, iovEnd);
-                for(i = iovBeg; i < iovEnd; ++i) {
-                    log_error("  %d base=%p len=%d", i, iov[i].iov_base,
-                            iov[i].iov_len);
-                }
-                abort();
-            }
-            while( iovBeg < iovEnd && iov[iovBeg].iov_len <= wr ) {
-                wr -= iov[iovBeg].iov_len;
-                ++iovBeg;
-            }
-            if( iovBeg == iovEnd )
-                break;
-            iov[iovBeg].iov_base = (char*)iov[iovBeg].iov_base + wr;
-            iov[iovBeg].iov_len -= wr;
-        }
-    }
 }
 
 void sock_flush(SockStream *strm)

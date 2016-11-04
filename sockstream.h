@@ -5,9 +5,6 @@ typedef struct SockStream SockStream;
 
 SockStream *sock_connectVNCHost(const char *hostVNC);
 
-SockStream *sock_accept(int vncDisplay, int runOnce);
-
-
 void sock_read(SockStream*, void *buf, int toRead);
 void sock_write(SockStream*, const void *buf, int toWrite);
 
@@ -33,10 +30,6 @@ void sock_discard(SockStream*, unsigned bytes);
 void sock_writeU8(SockStream*, unsigned);
 void sock_writeU16(SockStream*, unsigned);
 void sock_writeU32(SockStream*, unsigned);
-
-
-void sock_writeRect(SockStream *strm, const char *buf, int bytesPerLine,
-        int width, int height);
 
 
 void sock_flush(SockStream*);
