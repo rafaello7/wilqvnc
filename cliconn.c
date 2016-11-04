@@ -12,6 +12,7 @@
 
 struct ClientConnection {
     SockStream *strm;
+    z_stream zstrm;
     int width;
     int height;
     char *name;
@@ -134,11 +135,16 @@ static void readPixelFormat(CliConn *conn, PixelFormat *pixelFormat)
 CliConn *cliconn_open(const char *vncHost, const char *passwdFile)
 {
     PixelFormat pixelFormat;
-    int toRd;
+    int toRd, initRes;
 
     CliConn *conn = malloc(sizeof(CliConn));
     conn->strm = sock_connectVNCHost(vncHost);
 
+    conn->zstrm.zalloc = NULL;
+    conn->zstrm.zfree = NULL;
+    conn->zstrm.opaque = NULL;
+    if( (initRes = inflateInit(&conn->zstrm)) != Z_OK )
+        log_fatal("inflateInit error=%d", initRes);
     VncVersion vncVer = exchangeVersion(conn);
     exchangeAuth(conn, passwdFile, vncVer);
     sock_writeU8(conn->strm, 0); // shared flag
@@ -315,41 +321,29 @@ static void decodeHextile(DisplayConnection *dispConn, SockStream *strm,
     }
 }
 
-static void decodeZRLE(DisplayConnection *dispConn, SockStream *strm,
+static void decodeZRLE(DisplayConnection *dispConn, CliConn *conn,
         int x, int y, int width, int height)
 {
-    // TODO: associate with SockStream
-    static z_stream zstrm;
-    static int isInitialized = 0;
     unsigned char *bufcompr, *bufdest;
     int comprlen, resInfl, outlen;
 
-    comprlen = sock_readU32(strm);
+    comprlen = sock_readU32(conn->strm);
     bufcompr = malloc(comprlen);
 
-    sock_read(strm, bufcompr, comprlen);
-    zstrm.next_in = (Bytef*)bufcompr;
-    zstrm.avail_in = comprlen;
-    if( ! isInitialized ) {
-        zstrm.zalloc = NULL;
-        zstrm.zfree = NULL;
-        zstrm.opaque = NULL;
-        int initRes = inflateInit(&zstrm);
-        if( initRes != Z_OK )
-            log_fatal("inflateInit error=%d", initRes);
-        isInitialized = 1;
-    }
+    sock_read(conn->strm, bufcompr, comprlen);
+    conn->zstrm.next_in = (Bytef*)bufcompr;
+    conn->zstrm.avail_in = comprlen;
     // assume that encoding produces less output than "raw" one
     outlen = width * height * clidisp_getBytesPerPixel(dispConn);
     bufdest = malloc(outlen);
-    zstrm.next_out = (Bytef*)bufdest;
-    zstrm.avail_out = outlen;
-    resInfl = inflate(&zstrm, Z_SYNC_FLUSH);
+    conn->zstrm.next_out = (Bytef*)bufdest;
+    conn->zstrm.avail_out = outlen;
+    resInfl = inflate(&conn->zstrm, Z_SYNC_FLUSH);
     if( resInfl != Z_OK )
         log_fatal("inflate returned %d", resInfl);
-    if( zstrm.avail_in != 0 )
-        log_fatal("non-zero inflate avail_in: %d", zstrm.avail_in);
-    outlen -= zstrm.avail_out;
+    if( conn->zstrm.avail_in != 0 )
+        log_fatal("non-zero inflate avail_in: %d", conn->zstrm.avail_in);
+    outlen -= conn->zstrm.avail_out;
     clidisp_decodeTRLE(dispConn, bufdest, outlen, x, y, width, height, 64);
     free(bufcompr);
     free(bufdest);
@@ -392,7 +386,7 @@ void cliconn_recvFramebufferUpdate(CliConn *conn, DisplayConnection *dispConn)
             decodeHextile(dispConn, strm, x, y, width, height);
             break;
         case 16:
-            decodeZRLE(dispConn, strm, x, y, width, height);
+            decodeZRLE(dispConn, conn, x, y, width, height);
             break;
         default:
             log_fatal("unsupported encoding %d", encType);
@@ -419,6 +413,7 @@ void cliconn_recvCutTextMsg(CliConn *conn)
 void cliconn_close(CliConn *conn)
 {
     sock_close(conn->strm);
+    inflateEnd(&conn->zstrm);
     free(conn);
 }
 
