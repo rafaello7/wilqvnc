@@ -4,7 +4,7 @@
 #include "clidisplay.h"
 #include "cliconn.h"
 #include "vnclog.h"
-#include "clicmdline.h"
+#include "cmdline.h"
 #include <zlib.h>
 
 
@@ -143,9 +143,6 @@ static void recvFramebufferUpdate(DisplayConnection *conn, SockStream *strm,
             break;
         case 16:
             decodeZRLE(conn, strm, x, y, width, height, bytespp);
-            break;
-        case 0x514c4957:
-            clidisp_decodeWILQ(conn, strm, x, y, width, height);
             break;
         default:
             log_fatal("unsupported encoding %d", encType);

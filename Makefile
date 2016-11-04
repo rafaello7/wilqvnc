@@ -1,29 +1,16 @@
-CLI_OBJS = clicmdline.o vnclog.o sockstream.o cliconn.o clidisplay.o \
-		   wilqvnc.o
-SRV_OBJS = srvcmdline.o vnclog.o sockstream.o srvconn.o srvdisplay.o \
-		   wilqvncsrv.o
-CTL_OBJS = vnclog.o srvcmdline.o wilqvncctl.o
+OBJS = cmdline.o vnclog.o sockstream.o cliconn.o clidisplay.o \
+	   wilqvnc.o
 
-
-all:: wilqvncsrv wilqvnc wilqvncctl
-
-wilqvnc: $(CLI_OBJS)
-	gcc $(CLI_OBJS) -o wilqvnc -lX11 -lXext -llz4 -lzstd -lz -lbz2
-
-wilqvncsrv: $(SRV_OBJS)
-	gcc $(SRV_OBJS) -o wilqvncsrv -lX11 -lXdamage -lXext -lXtst -lXfixes \
-		-llz4 -lzstd -lz -lbz2
-
-wilqvncctl: $(CTL_OBJS)
-	gcc $(CTL_OBJS) -o wilqvncctl
+wilqvnc: $(OBJS)
+	gcc $(OBJS) -o wilqvnc -lX11 -lXext -lz
 
 .c.o:
 	gcc -g -c -Wall $<
 
-$(SRV_OBJS) $(CLI_OBJS): vnccommon.h
+$(OBJS): vnccommon.h
 
 clean:
-	rm -f $(SRV_OBJS) $(CLI_OBJS) $(CTL_OBJS) wilqvnc wilqvncsrv wilqvncctl
+	rm -f $(OBJS) wilqvnc wilqvnc.tar.gz
 
 tar:
 	cd .. && tar cf wilqvnc/wilqvnc.tar.gz  wilqvnc/*.[ch] wilqvnc/Makefile
