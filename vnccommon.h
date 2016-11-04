@@ -7,21 +7,6 @@ typedef enum {
     VNCVER_3_8
 } VncVersion;
 
-typedef enum {
-    COMPR_NONE,
-    COMPR_LZ4,
-    COMPR_ZSTD,
-    COMPR_ZLIB,
-    COMPR_BZ2,
-} CompressionType;
-
-typedef enum {
-    ENC_NONE,
-    ENC_DIFF,
-    ENC_TRLE,
-    ENC_TILA
-} EncodingType;
-
 typedef struct {
     unsigned bitsPerPixel;
     unsigned depth;

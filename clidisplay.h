@@ -29,6 +29,7 @@ DisplayConnection *clidisp_open(int width, int height, const char *title,
 
 
 void clidisp_getPixelFormat(DisplayConnection*, PixelFormat*);
+unsigned clidisp_getBytesPerPixel(DisplayConnection*);
 
 
 /* Waits until next window event appears in event queue or some data is
@@ -36,7 +37,8 @@ void clidisp_getPixelFormat(DisplayConnection*, PixelFormat*);
  * Window event is stored in DisplayEvent structure.
  * Returns True when some data is aveilable on socket, False otherwise.
  */
-int clidisp_nextEvent(DisplayConnection*, SockStream*, DisplayEvent*, int wait);
+int clidisp_nextEvent(DisplayConnection*, int isCliDataAvail, int cliFd,
+        DisplayEvent*, int wait);
 
 
 /* Stores rectangle image on remote desktop display.

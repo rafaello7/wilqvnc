@@ -135,6 +135,11 @@ void clidisp_getPixelFormat(DisplayConnection *conn, PixelFormat *pixelFormat)
             pixelFormat->maxBlue);
 }
 
+unsigned clidisp_getBytesPerPixel(DisplayConnection *conn)
+{
+    return (conn->img->bits_per_pixel + 7) / 8;
+}
+
 void clidisp_flush(DisplayConnection *conn)
 {
     if( conn->shmInfo.shmaddr != NULL ) {
@@ -255,10 +260,10 @@ static void processPendingEvents(DisplayConnection *conn,
     }
 }
 
-int clidisp_nextEvent(DisplayConnection *conn, SockStream *strm,
+int clidisp_nextEvent(DisplayConnection *conn, int isCliDataAvail, int cliFd,
         DisplayEvent *displayEvent, int wait)
 {
-    Bool isEvFd = sock_isDataAvail(strm);
+    Bool isEvFd = isCliDataAvail;
     struct timeval tmout;
 
     tmout.tv_sec = 0;
@@ -267,7 +272,7 @@ int clidisp_nextEvent(DisplayConnection *conn, SockStream *strm,
     processPendingEvents(conn, displayEvent, False);
     while( displayEvent->evType == VET_NONE && !isEvFd ) {
         int dispFd = XConnectionNumber(conn->d);
-        int sockFd = sock_fd(strm);
+        int sockFd = cliFd;
         FD_SET(dispFd, &conn->fds);
         FD_SET(sockFd, &conn->fds);
         int selCnt = select((dispFd > sockFd ? dispFd : sockFd)+1,
