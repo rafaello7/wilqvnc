@@ -129,6 +129,19 @@ static void readPixelFormat(CliConn *conn, PixelFormat *pixelFormat)
     pixelFormat->shiftRed = sock_readU8(conn->strm);
     pixelFormat->shiftGreen = sock_readU8(conn->strm);
     pixelFormat->shiftBlue = sock_readU8(conn->strm);
+    log_debug("remote pixel format:");
+    log_debug("  bitsPerPixel: %d", pixelFormat->bitsPerPixel);
+    log_debug("  depth:        %d", pixelFormat->depth);
+    log_debug("  bigEndian:    %s",
+            pixelFormat->bigEndian ? "true" : "false");
+    log_debug("  trueColor:    %s",
+            pixelFormat->trueColor ? "true" : "false");
+    log_debug("  red   shift:  %-2d  max: %d", pixelFormat->shiftRed,
+            pixelFormat->maxRed);
+    log_debug("  green shift:  %-2d  max: %d", pixelFormat->shiftGreen,
+            pixelFormat->maxGreen);
+    log_debug("  blue  shift:  %-2d  max: %d", pixelFormat->shiftBlue,
+            pixelFormat->maxBlue);
     sock_discard(conn->strm, 3);     // padding
 }
 

@@ -120,7 +120,7 @@ void clidisp_getPixelFormat(DisplayConnection *conn, PixelFormat *pixelFormat)
             &pixelFormat->shiftGreen);
     extractShiftMaxFromMask(conn->img->blue_mask, &pixelFormat->maxBlue,
             &pixelFormat->shiftBlue);
-    log_debug("pixel format:");
+    log_debug("display pixel format:");
     log_debug("  bitsPerPixel: %d", pixelFormat->bitsPerPixel);
     log_debug("  depth:        %d", pixelFormat->depth);
     log_debug("  bigEndian:    %s",
