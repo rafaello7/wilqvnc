@@ -61,7 +61,7 @@ int main(int argc, char *argv[])
                 ++frameCnt;
                 unsigned long long curTm = curTimeMs();
                 if( curTm - lastShowFpTm >= 1000 ) {
-                    log_info("%.2f fps",
+                    printf("%.2f fps\n",
                             1000.0 * frameCnt / (curTm - lastShowFpTm));
                     lastShowFpTm = curTm;
                     frameCnt = 0;

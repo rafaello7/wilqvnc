@@ -5,7 +5,7 @@ wilqvnc: $(OBJS)
 	gcc $(OBJS) -o wilqvnc -lX11 -lXext -lz
 
 .c.o:
-	gcc -g -c -Wall $<
+	gcc -O -c -Wall $<
 
 $(OBJS): vnccommon.h
 
